@@ -580,11 +580,13 @@ let playerHealth = 100; // Player health
 let playerAmmo = 6; // Player ammo count
 let maxAmmo = 6;
 let isReloading = false; // Track if reload is in progress
-let reloadSkillBarInterval = null; // Animation interval for reload bar
+let reloadSkillBarAnimationFrame = null; // Animation frame ID for reload bar
 let reloadSliderPosition = 0; // Current position of reload slider (0-100)
 let reloadSliderDirection = 1; // Direction: 1 = right, -1 = left
-let reloadPerfectZoneStart = 45; // Perfect zone start (percentage) - smaller zone
+let reloadLastAnimationTime = 0; // For smooth reload animation timing
+let reloadPerfectZoneStart = 45; // Perfect zone start (percentage) - will be randomized
 let reloadPerfectZoneEnd = 55; // Perfect zone end (percentage) - 10% wide zone
+const PERFECT_ZONE_WIDTH = 10; // Width of perfect zone in percentage
 let gameStarted = false;
 let lastImportantMessageTime = 0;
 let lastFireTime = 0; // Fire rate limiting
@@ -1221,6 +1223,12 @@ const gun = new GunController({
     // C. FIRING
     onFire: () => {
         if (!gameStarted || (isPvPMode ? playerHealth <= 0 : opponentHealth <= 0)) return; // Only fire if game started (can fire when holstered)
+        
+        // Prevent shooting while reloading
+        if (isReloading) {
+            hud.innerText = "RELOADING...";
+            return;
+        }
         
         // Check ammo
         if (playerAmmo <= 0) {
@@ -1871,9 +1879,9 @@ function endGame(victory) {
     document.getElementById('reload-skill-bar').classList.remove('active');
     
     // Stop any active reload
-    if (reloadSkillBarInterval) {
-        clearInterval(reloadSkillBarInterval);
-        reloadSkillBarInterval = null;
+    if (reloadSkillBarAnimationFrame) {
+        cancelAnimationFrame(reloadSkillBarAnimationFrame);
+        reloadSkillBarAnimationFrame = null;
     }
     isReloading = false;
     
@@ -2430,7 +2438,15 @@ function startReloadSkillGame() {
     // Show reload skill bar
     const skillBar = document.getElementById('reload-skill-bar');
     const slider = document.getElementById('reload-skill-bar-slider');
+    const track = document.getElementById('reload-skill-bar-track');
     const label = document.getElementById('reload-skill-bar-label');
+    
+    if (!skillBar || !slider || !track || !label) {
+        console.error('Reload skill bar elements not found!');
+        isReloading = false;
+        return;
+    }
+    
     skillBar.classList.add('active');
     label.textContent = 'TAP TO STOP';
     label.style.color = '#00ffff';
@@ -2441,10 +2457,43 @@ function startReloadSkillGame() {
         reloadBtn.disabled = true;
     }
     
-    // Animate slider moving left to right
-    const sliderSpeed = 2; // Percentage per frame
-    reloadSkillBarInterval = setInterval(() => {
-        reloadSliderPosition += sliderSpeed * reloadSliderDirection;
+    // Reset slider position
+    reloadSliderPosition = 0;
+    reloadSliderDirection = 1;
+    slider.style.transform = 'translateX(0%)';
+    
+    // Randomize perfect zone position (between 10% and 90% to keep it on screen)
+    const minZoneStart = 10; // Minimum start position
+    const maxZoneStart = 90 - PERFECT_ZONE_WIDTH; // Maximum start position (ensures zone stays within bounds)
+    const randomZoneStart = Math.random() * (maxZoneStart - minZoneStart) + minZoneStart;
+    reloadPerfectZoneStart = Math.round(randomZoneStart);
+    reloadPerfectZoneEnd = reloadPerfectZoneStart + PERFECT_ZONE_WIDTH;
+    
+    // Update the visual perfect zone position
+    const perfectZone = document.getElementById('reload-skill-bar-perfect-zone');
+    if (perfectZone) {
+        perfectZone.style.left = reloadPerfectZoneStart + '%';
+        perfectZone.style.width = PERFECT_ZONE_WIDTH + '%';
+    }
+    
+    // Animate slider using requestAnimationFrame for smooth performance
+    const sliderSpeed = 2; // Percentage per frame (simpler calculation)
+    reloadLastAnimationTime = performance.now();
+    
+    const animateSlider = (currentTime) => {
+        if (!isReloading) {
+            if (reloadSkillBarAnimationFrame) {
+                cancelAnimationFrame(reloadSkillBarAnimationFrame);
+                reloadSkillBarAnimationFrame = null;
+            }
+            return;
+        }
+        
+        // Calculate delta time for consistent speed regardless of frame rate
+        const deltaTime = currentTime - reloadLastAnimationTime;
+        const frameMultiplier = Math.min(deltaTime / 16.67, 2); // Cap at 2x to prevent jumps
+        
+        reloadSliderPosition += sliderSpeed * reloadSliderDirection * frameMultiplier;
         
         // Bounce at edges
         if (reloadSliderPosition >= 100) {
@@ -2455,16 +2504,31 @@ function startReloadSkillGame() {
             reloadSliderDirection = 1;
         }
         
-        // Update slider position
-        slider.style.left = reloadSliderPosition + '%';
-    }, 16); // ~60fps
+        // Use transform instead of left for better performance (GPU-accelerated)
+        // Calculate pixel position based on track width
+        const trackWidth = track.offsetWidth;
+        const sliderWidth = slider.offsetWidth;
+        const maxPosition = trackWidth - sliderWidth;
+        const pixelPosition = (reloadSliderPosition / 100) * maxPosition;
+        
+        slider.style.transform = `translateX(${pixelPosition}px)`;
+        
+        // Note: reloadSliderPosition is stored as percentage (0-100) for perfect zone checking
+        
+        reloadLastAnimationTime = currentTime;
+        reloadSkillBarAnimationFrame = requestAnimationFrame(animateSlider);
+    };
+    
+    reloadSkillBarAnimationFrame = requestAnimationFrame(animateSlider);
     
     // Handle tap/click to stop slider
     const stopSlider = () => {
         if (!isReloading) return;
         
-        clearInterval(reloadSkillBarInterval);
-        reloadSkillBarInterval = null;
+        if (reloadSkillBarAnimationFrame) {
+            cancelAnimationFrame(reloadSkillBarAnimationFrame);
+            reloadSkillBarAnimationFrame = null;
+        }
         
         // Check if slider is in perfect zone
         const inPerfectZone = reloadSliderPosition >= reloadPerfectZoneStart && 
@@ -2999,7 +3063,7 @@ async function startPvPGame(data) {
     
     // Add click/tap to fire (like single-player)
     const fireOnClick = (e) => {
-        if (gameStarted) {
+        if (gameStarted && !isReloading) {
             e.preventDefault();
             gun.fire();
         }
@@ -3173,9 +3237,9 @@ async function startGame(opponentData) {
             orientationEnabled = true;
         }, 100);
         
-        // Add click/tap to fire (can fire even when holstered)
+        // Add click/tap to fire (can fire even when holstered, but not while reloading)
         const fireOnClick = (e) => {
-            if (gameStarted) {
+            if (gameStarted && !isReloading) {
                 e.preventDefault();
                 gun.fire(); // Call the fire method
             }
@@ -3309,7 +3373,7 @@ const TWEEN = {
     }
 };
 
-let lastAnimationTime = 0;
+let opponentAnimationTime = 0; // For opponent animation timing
 
 function animate(time) {
     requestAnimationFrame(animate);
@@ -3317,11 +3381,11 @@ function animate(time) {
     
     // Update opponent animations
     if (opponentMixer && gameStarted) {
-        const delta = lastAnimationTime > 0 ? (time - lastAnimationTime) / 1000 : 0.016; // Convert to seconds
-        lastAnimationTime = time;
+        const delta = opponentAnimationTime > 0 ? (time - opponentAnimationTime) / 1000 : 0.016; // Convert to seconds
+        opponentAnimationTime = time;
         opponentMixer.update(delta);
     } else {
-        lastAnimationTime = time;
+        opponentAnimationTime = time;
     }
     
     // Update gun position if game has started (works whether holstered or not)
