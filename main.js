@@ -461,7 +461,7 @@ scene.add(opponentGroup);
 
 let opponentModel = null;
 let opponentMixer = null;
-let opponentActions = [];
+let opponentActions = {}; // Changed to object to store by name
 
 // Load the PFC model
 loader.load(
@@ -533,21 +533,25 @@ loader.load(
         if (gltf.animations && gltf.animations.length > 0) {
             opponentMixer = new AnimationMixer(opponentModel);
             
-            // Create actions for all animations
+            // Create actions for all animations and store by name
+            opponentActions = {};
             gltf.animations.forEach((clip) => {
                 const action = opponentMixer.clipAction(clip);
-                opponentActions.push(action);
+                action.setLoop(THREE.LoopRepeat); // Loop animations by default
+                opponentActions[clip.name] = action;
                 console.log('Found animation:', clip.name);
             });
             
-            // Play the first animation (or all animations)
-            if (opponentActions.length > 0) {
-                // Play all animations
-                opponentActions.forEach(action => {
-                    action.play();
-                });
-                // Or play just the first one:
-                // opponentActions[0].play();
+            // Play idle animation by default (or first animation if no idle)
+            if (opponentActions['Idle'] || opponentActions['idle']) {
+                const idleAction = opponentActions['Idle'] || opponentActions['idle'];
+                idleAction.play();
+                opponentGroup.userData.currentAnimation = idleAction;
+            } else if (Object.keys(opponentActions).length > 0) {
+                // Play first available animation
+                const firstAction = Object.values(opponentActions)[0];
+                firstAction.play();
+                opponentGroup.userData.currentAnimation = firstAction;
             }
         } else {
             console.log('No animations found in PFC model');
@@ -575,6 +579,12 @@ let opponentHealth = 100;
 let playerHealth = 100; // Player health
 let playerAmmo = 6; // Player ammo count
 let maxAmmo = 6;
+let isReloading = false; // Track if reload is in progress
+let reloadSkillBarInterval = null; // Animation interval for reload bar
+let reloadSliderPosition = 0; // Current position of reload slider (0-100)
+let reloadSliderDirection = 1; // Direction: 1 = right, -1 = left
+let reloadPerfectZoneStart = 45; // Perfect zone start (percentage) - smaller zone
+let reloadPerfectZoneEnd = 55; // Perfect zone end (percentage) - 10% wide zone
 let gameStarted = false;
 let lastImportantMessageTime = 0;
 let lastFireTime = 0; // Fire rate limiting
@@ -634,7 +644,19 @@ let opponentPlayer = null;
 let isPlayer1 = false;
 let gameMode = 'singleplayer'; // 'singleplayer' or 'pvp'
 let matchmakingActive = false;
-const SERVER_URL = 'http://localhost:3000'; // Change this to your server URL
+// Auto-detect server URL based on hostname
+// For local development: use localhost
+// For phone testing: replace 'localhost' with your computer's IP (e.g., '192.168.12.187')
+const getServerURL = () => {
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return 'http://localhost:3000';
+    } else {
+        // If accessing from phone, use the same hostname but port 3000
+        return `http://${hostname}:3000`;
+    }
+};
+const SERVER_URL = getServerURL();
 
 // Available weapons
 const weapons = [
@@ -713,6 +735,20 @@ function updateAmmoCount() {
     } else {
         ammoCount.classList.remove('low');
     }
+    
+    // Update reload button state
+    const reloadBtn = document.getElementById('reload-button');
+    if (reloadBtn) {
+        if (playerAmmo >= maxAmmo) {
+            reloadBtn.disabled = true;
+            reloadBtn.style.opacity = '0.5';
+            reloadBtn.style.pointerEvents = 'none';
+        } else if (!isReloading) {
+            reloadBtn.disabled = false;
+            reloadBtn.style.opacity = '1';
+            reloadBtn.style.pointerEvents = 'auto';
+        }
+    }
 }
 
 // Function to update opponent health bar (3D only)
@@ -778,6 +814,74 @@ function getEnemyAttackPattern(phase) {
     }
     
     return enemyPatternType;
+}
+
+// ============================================
+// CHARACTER ANIMATION SYSTEM
+// ============================================
+
+/**
+ * Play an animation on the opponent character
+ * @param {string} animationName - Name of the animation (e.g., 'Idle', 'Walk', 'Shoot', 'Death')
+ * @param {boolean} loop - Whether to loop the animation (default: true)
+ * @param {number} fadeIn - Fade in duration in seconds (default: 0.3)
+ */
+function playOpponentAnimation(animationName, loop = true, fadeIn = 0.3) {
+    if (!opponentMixer || !opponentActions[animationName]) {
+        console.warn(`Animation "${animationName}" not found. Available:`, Object.keys(opponentActions));
+        return;
+    }
+    
+    const newAction = opponentActions[animationName];
+    const currentAction = opponentGroup.userData.currentAnimation;
+    
+    // If same animation is already playing, do nothing
+    if (currentAction === newAction && newAction.isRunning()) {
+        return;
+    }
+    
+    // Fade out current animation
+    if (currentAction) {
+        currentAction.fadeOut(fadeIn);
+    }
+    
+    // Set loop mode
+    if (loop) {
+        newAction.setLoop(THREE.LoopRepeat);
+    } else {
+        newAction.setLoop(THREE.LoopOnce);
+        newAction.clampWhenFinished = true;
+    }
+    
+    // Fade in and play new animation
+    newAction.reset().fadeIn(fadeIn).play();
+    opponentGroup.userData.currentAnimation = newAction;
+}
+
+/**
+ * Update opponent animation based on game state
+ * Automatically switches between Idle, Walk, Shoot, and Death animations
+ */
+function updateOpponentAnimation() {
+    if (!opponentMixer || opponentHealth <= 0) return;
+    
+    // Check if opponent is moving (has lateral movement)
+    const isMoving = Math.abs(opponentGroup.position.x - (Math.sin(Date.now() * 0.001) * 8)) < 0.1;
+    
+    // Play appropriate animation based on state
+    if (opponentHealth <= 0) {
+        playOpponentAnimation('Death', false);
+    } else if (isMoving && (opponentActions['Walk'] || opponentActions['walk'] || opponentActions['Running'])) {
+        const walkAnim = opponentActions['Walk'] || opponentActions['walk'] || opponentActions['Running'];
+        if (opponentGroup.userData.currentAnimation !== walkAnim) {
+            playOpponentAnimation('Walk', true);
+        }
+    } else if (opponentActions['Idle'] || opponentActions['idle']) {
+        const idleAnim = opponentActions['Idle'] || opponentActions['idle'];
+        if (opponentGroup.userData.currentAnimation !== idleAnim) {
+            playOpponentAnimation('Idle', true);
+        }
+    }
 }
 
 // Opponent Shooting Function (Raycast-based, instant hit)
@@ -1093,19 +1197,10 @@ const gun = new GunController({
         }
         
         if (isHolstered) {
-            // Reload when holstered
+            // No longer auto-reloads when holstered - user must use reload button
             if (playerAmmo < maxAmmo) {
-                playerAmmo = maxAmmo;
-                updateAmmoCount();
-                lastImportantMessageTime = Date.now();
-                hud.innerText = "RELOADED";
-                // Show reload message for a moment, then show ready status
-                setTimeout(() => {
-                    if (gun.isHolstered) {
-                        hud.innerText = "STATUS: READY";
-                    }
-                }, 1000);
-        } else {
+                hud.innerText = "STATUS: READY (Tap Reload)";
+            } else {
                 hud.innerText = "STATUS: READY";
             }
             
@@ -1772,6 +1867,15 @@ function endGame(victory) {
     document.getElementById('crosshair').classList.remove('visible');
     document.getElementById('health-bar-container').classList.remove('visible');
     document.getElementById('ammo-count').classList.remove('visible');
+    document.getElementById('reload-button').classList.remove('visible');
+    document.getElementById('reload-skill-bar').classList.remove('active');
+    
+    // Stop any active reload
+    if (reloadSkillBarInterval) {
+        clearInterval(reloadSkillBarInterval);
+        reloadSkillBarInterval = null;
+    }
+    isReloading = false;
     
     // Hide dodge button
     const dodgeButton = document.getElementById('dodge-button');
@@ -2309,6 +2413,168 @@ function setupLoginHandlers() {
     });
 }
 
+// ============================================
+// RELOAD SKILL SYSTEM
+// ============================================
+
+/**
+ * Start the reload skill mini-game
+ */
+function startReloadSkillGame() {
+    if (isReloading || playerAmmo >= maxAmmo) return;
+    
+    isReloading = true;
+    reloadSliderPosition = 0;
+    reloadSliderDirection = 1;
+    
+    // Show reload skill bar
+    const skillBar = document.getElementById('reload-skill-bar');
+    const slider = document.getElementById('reload-skill-bar-slider');
+    const label = document.getElementById('reload-skill-bar-label');
+    skillBar.classList.add('active');
+    label.textContent = 'TAP TO STOP';
+    label.style.color = '#00ffff';
+    
+    // Disable reload button during reload
+    const reloadBtn = document.getElementById('reload-button');
+    if (reloadBtn) {
+        reloadBtn.disabled = true;
+    }
+    
+    // Animate slider moving left to right
+    const sliderSpeed = 2; // Percentage per frame
+    reloadSkillBarInterval = setInterval(() => {
+        reloadSliderPosition += sliderSpeed * reloadSliderDirection;
+        
+        // Bounce at edges
+        if (reloadSliderPosition >= 100) {
+            reloadSliderPosition = 100;
+            reloadSliderDirection = -1;
+        } else if (reloadSliderPosition <= 0) {
+            reloadSliderPosition = 0;
+            reloadSliderDirection = 1;
+        }
+        
+        // Update slider position
+        slider.style.left = reloadSliderPosition + '%';
+    }, 16); // ~60fps
+    
+    // Handle tap/click to stop slider
+    const stopSlider = () => {
+        if (!isReloading) return;
+        
+        clearInterval(reloadSkillBarInterval);
+        reloadSkillBarInterval = null;
+        
+        // Check if slider is in perfect zone
+        const inPerfectZone = reloadSliderPosition >= reloadPerfectZoneStart && 
+                             reloadSliderPosition <= reloadPerfectZoneEnd;
+        
+        if (inPerfectZone) {
+            // Perfect reload - fast reload (instant)
+            label.textContent = 'PERFECT RELOAD!';
+            label.style.color = '#00ff00';
+            playerAmmo = maxAmmo;
+            updateAmmoCount();
+            hud.innerText = "PERFECT RELOAD!";
+            hud.style.color = "#00ff00";
+            
+            // Send reload action to server in PvP
+            if (isPvPMode) {
+                sendPlayerAction({ type: 'reload', timestamp: Date.now(), perfect: true });
+            }
+            
+            setTimeout(() => {
+                skillBar.classList.remove('active');
+                isReloading = false;
+                label.style.color = '#00ffff';
+                if (reloadBtn) reloadBtn.disabled = false;
+                hud.style.color = "";
+                hud.innerText = "STATUS: AIMING (Ready)";
+            }, 500);
+        } else {
+            // Missed perfect zone - slow reload
+            const distanceFromPerfect = Math.min(
+                Math.abs(reloadSliderPosition - reloadPerfectZoneStart),
+                Math.abs(reloadSliderPosition - reloadPerfectZoneEnd)
+            );
+            const reloadTime = 1000 + (distanceFromPerfect * 20); // 1-2 seconds based on distance
+            
+            label.textContent = 'RELOADING...';
+            label.style.color = '#ffaa00';
+            hud.innerText = "RELOADING...";
+            hud.style.color = "#ffaa00";
+            
+            // Send reload action to server in PvP
+            if (isPvPMode) {
+                sendPlayerAction({ type: 'reload', timestamp: Date.now(), perfect: false });
+            }
+            
+            setTimeout(() => {
+                playerAmmo = maxAmmo;
+                updateAmmoCount();
+                skillBar.classList.remove('active');
+                isReloading = false;
+                label.style.color = '#00ffff';
+                if (reloadBtn) reloadBtn.disabled = false;
+                hud.style.color = "";
+                hud.innerText = "RELOADED";
+                setTimeout(() => {
+                    hud.innerText = "STATUS: AIMING (Ready)";
+                }, 500);
+            }, reloadTime);
+        }
+    };
+    
+    // Add event listeners for tap/click (remove after use)
+    const clickHandler = () => stopSlider();
+    const touchHandler = (e) => {
+        e.preventDefault();
+        stopSlider();
+    };
+    
+    skillBar.addEventListener('click', clickHandler, { once: true });
+    skillBar.addEventListener('touchend', touchHandler, { once: true });
+}
+
+// Setup reload button handler
+function setupReloadButton() {
+    const reloadBtn = document.getElementById('reload-button');
+    if (reloadBtn) {
+        console.log('Setting up reload button...');
+        
+        // Remove old listeners by cloning
+        const newBtn = reloadBtn.cloneNode(true);
+        reloadBtn.parentNode.replaceChild(newBtn, reloadBtn);
+        
+        const handleReload = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Reload button clicked!', { isReloading, playerAmmo, maxAmmo, gameStarted });
+            if (!isReloading && playerAmmo < maxAmmo && gameStarted) {
+                console.log('Starting reload skill game...');
+                startReloadSkillGame();
+            } else {
+                console.log('Reload blocked:', { isReloading, playerAmmo, maxAmmo, gameStarted });
+            }
+        };
+        
+        newBtn.addEventListener('click', handleReload);
+        newBtn.addEventListener('touchend', handleReload);
+        
+        console.log('Reload button listeners attached');
+    } else {
+        console.error('Reload button not found!');
+    }
+}
+
+// Setup reload button when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupReloadButton);
+} else {
+    setupReloadButton();
+}
+
 // Initialize on load
 initializeAuth();
 
@@ -2745,6 +3011,7 @@ async function startPvPGame(data) {
     document.getElementById('crosshair').classList.add('visible');
     document.getElementById('health-bar-container').classList.add('visible');
     document.getElementById('ammo-count').classList.add('visible');
+    document.getElementById('reload-button').classList.add('visible');
     
     // Update ammo display to match weapon capacity
     const ammoCountEl = document.getElementById('ammo-count');
@@ -2932,6 +3199,7 @@ async function startGame(opponentData) {
         // Show health bar and ammo count
         document.getElementById('health-bar-container').classList.add('visible');
         document.getElementById('ammo-count').classList.add('visible');
+        document.getElementById('reload-button').classList.add('visible');
         
         // Dodge button removed
         
@@ -3092,6 +3360,9 @@ function animate(time) {
         // Keep opponent group at ground level (y: 0)
         opponentGroup.position.y = 0;
         
+        // Update animation based on state
+        updateOpponentAnimation();
+        
         // Make opponent look at player (aim at camera)
         const playerPos = camera.position.clone();
         const opponentPos = opponentGroup.position.clone();
@@ -3109,17 +3380,6 @@ function animate(time) {
             opponentGroup.userData.healthBarFill.lookAt(camera.position);
             if (opponentGroup.userData.healthBarBg) {
                 opponentGroup.userData.healthBarBg.lookAt(camera.position);
-            }
-        }
-        
-        // Update dodge cooldown display
-        const dodgeButton = document.getElementById('dodge-button');
-        if (dodgeButton && gameStarted) {
-            const now = Date.now();
-            if (dodgeCooldown && now >= dodgeCooldownTime) {
-                dodgeCooldown = false;
-                dodgeButton.classList.remove('cooldown');
-                dodgeButton.disabled = false;
             }
         }
         
