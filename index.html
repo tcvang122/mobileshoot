@@ -102,36 +102,999 @@
             pointer-events: none;
         }
         
-        /* Ammo Count */
+        /* Ammo Count - Bullet Display */
         #ammo-count {
-            position: absolute; top: 20px; right: 20px;
-            color: white; font-family: monospace; font-size: 1.5rem;
-            font-weight: bold; text-shadow: 2px 2px 4px black;
+            position: absolute; top: 60px; left: 20px;
             z-index: 10;
             background: rgba(0, 0, 0, 0.5);
-            padding: 10px 20px;
+            padding: 6px 10px;
             border: 2px solid rgba(255, 255, 255, 0.8);
             border-radius: 4px;
-            opacity: 0;
-            transition: opacity 0.3s;
+            display: none;
+            flex-direction: row;
+            gap: 4px;
+            align-items: center;
         }
         #ammo-count.visible {
+            display: flex;
+        }
+        .bullet {
+            width: 12px;
+            height: 18px;
+            background: linear-gradient(180deg, #888 0%, #666 50%, #444 100%);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 2px;
+            position: relative;
+            transition: opacity 0.2s, transform 0.2s;
+        }
+        .bullet::before {
+            content: '';
+            position: absolute;
+            top: 1px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 5px;
+            height: 5px;
+            background: radial-gradient(circle, #ffaa00 0%, #ff6600 100%);
+            border-radius: 50%;
+        }
+        .bullet.empty {
+            opacity: 0.3;
+            background: linear-gradient(180deg, #333 0%, #222 50%, #111 100%);
+        }
+        .bullet.empty::before {
+            background: #333;
+        }
+        #ammo-count.low .bullet:not(.empty) {
+            animation: bulletPulse 0.8s infinite;
+        }
+        @keyframes bulletPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        /* Dodge Button */
+        .dodge-button {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(255, 200, 0, 0.9) 0%, rgba(255, 150, 0, 0.9) 100%);
+            border: 3px solid rgba(255, 255, 255, 0.9);
+            color: white;
+            font-weight: bold;
+            font-size: 0.7rem;
+            cursor: pointer;
+            pointer-events: auto;
+            z-index: 15;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5), 0 0 20px rgba(255, 200, 0, 0.4);
+            transition: all 0.2s ease;
+            opacity: 0;
+            transform: scale(0.9);
+        }
+        .dodge-button.visible {
             opacity: 1;
+            transform: scale(1);
         }
-        #ammo-count.low {
-            color: #ff4757;
-            animation: pulse 1s infinite;
+        .dodge-button:active {
+            transform: scale(0.85);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
         }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+        .dodge-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: linear-gradient(135deg, rgba(100, 100, 100, 0.7) 0%, rgba(80, 80, 80, 0.7) 100%);
+        }
+        .dodge-icon {
+            font-size: 1.5rem;
+            line-height: 1;
+            margin-bottom: 2px;
+        }
+        .dodge-label {
+            font-size: 0.65rem;
+            letter-spacing: 1px;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+        }
+        .dodge-cooldown-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: conic-gradient(
+                from 0deg,
+                transparent 0deg,
+                rgba(0, 0, 0, 0.6) 0deg,
+                rgba(0, 0, 0, 0.6) 360deg
+            );
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+        .dodge-button.cooldown .dodge-cooldown-overlay {
+            opacity: 1;
+            animation: dodgeCooldown 2s linear;
+        }
+        @keyframes dodgeCooldown {
+            from {
+                background: conic-gradient(
+                    from 0deg,
+                    transparent 0deg,
+                    rgba(0, 0, 0, 0.6) 0deg,
+                    rgba(0, 0, 0, 0.6) 360deg
+                );
+            }
+            to {
+                background: conic-gradient(
+                    from 0deg,
+                    transparent 0deg,
+                    rgba(0, 0, 0, 0.6) 360deg,
+                    rgba(0, 0, 0, 0.6) 360deg
+                );
+            }
+        }
+        
+        /* Menu System */
+        #main-menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(10, 10, 26, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            z-index: 100;
+            display: flex; flex-direction: column;
+            pointer-events: auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+        }
+        #main-menu.hidden {
+            display: none;
+        }
+        #username-edit-modal.hidden {
+            display: none !important;
+        }
+        
+        /* Login/Registration Screen */
+        #login-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(10, 10, 26, 0.98) 0%, rgba(26, 26, 46, 0.98) 100%);
+            z-index: 500;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: white;
+        }
+        #login-screen.hidden {
+            display: none;
+        }
+        .login-container {
+            background: rgba(26, 26, 46, 0.95);
+            padding: 40px;
+            border-radius: 12px;
+            border: 2px solid #00ffff;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
+        }
+        .login-title {
+            color: #00ffff;
+            font-size: 2rem;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        }
+        .login-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .login-tab {
+            flex: 1;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            color: #00ffff;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        .login-tab.active {
+            background: rgba(0, 255, 255, 0.2);
+            border-color: #00ffff;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .login-input {
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            color: white;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+        .login-input:focus {
+            outline: none;
+            border-color: #00ffff;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+        .login-button {
+            padding: 12px;
+            background: linear-gradient(135deg, #00ffff 0%, #00aaff 100%);
+            color: #000;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s;
+        }
+        .login-button:hover {
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+        }
+        .login-error {
+            color: #ff4444;
+            text-align: center;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            min-height: 20px;
+        }
+        @media (max-width: 480px) {
+            .login-container {
+                padding: 30px 20px;
+            }
+            .login-title {
+                font-size: 1.5rem;
+            }
+        }
+        .menu-header {
+            text-align: center; 
+            padding: 15px;
+            color: #00ffff; 
+            font-size: 1.5rem; 
+            font-weight: bold;
+            text-transform: uppercase; 
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+            border-bottom: 2px solid rgba(0, 255, 255, 0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logout-button {
+            padding: 8px 15px;
+            background: rgba(255, 0, 0, 0.7);
+            color: white;
+            border: 1px solid rgba(255, 0, 0, 0.9);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            transition: all 0.3s;
+        }
+        .logout-button:hover {
+            background: rgba(255, 0, 0, 0.9);
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+        @media (max-width: 480px) {
+            .menu-header {
+                padding: 12px;
+                font-size: 1.2rem;
+                letter-spacing: 1px;
+            }
+        }
+        .menu-content {
+            flex: 1; 
+            padding: 15px;
+            display: flex; 
+            flex-direction: column; 
+            gap: 15px;
+            max-width: 1200px; 
+            margin: 0 auto; 
+            width: 100%;
+            box-sizing: border-box;
+        }
+        @media (max-width: 480px) {
+            .menu-content {
+                padding: 10px;
+                gap: 12px;
+            }
+        }
+        .menu-section-title {
+            color: #00ffff; 
+            font-size: 1.1rem; 
+            font-weight: bold;
+            text-transform: uppercase; 
+            letter-spacing: 1.5px;
+            margin-bottom: 12px;
+            text-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
+        }
+        @media (max-width: 480px) {
+            .menu-section-title {
+                font-size: 0.95rem;
+                margin-bottom: 10px;
+            }
+        }
+        .opponent-grid {
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px; 
+            margin-bottom: 20px;
+        }
+        @media (max-width: 480px) {
+            .opponent-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+        }
+        @media (min-width: 481px) and (max-width: 768px) {
+            .opponent-grid {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+            }
+        }
+        .opponent-card {
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .opponent-card:hover {
+            border-color: #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            transform: translateY(-5px);
+        }
+        .opponent-card.selected {
+            border-color: #00ff00;
+            box-shadow: 0 0 25px rgba(0, 255, 0, 0.7);
+            background: rgba(0, 50, 0, 0.6);
+        }
+        .opponent-card.boss {
+            border-color: #ff00ff;
+            background: rgba(50, 0, 50, 0.6);
+        }
+        .opponent-card.boss:hover {
+            box-shadow: 0 0 25px rgba(255, 0, 255, 0.7);
+        }
+        .opponent-card.reward {
+            border-color: #ffaa00;
+        }
+        .opponent-image-container {
+            width: 100%; 
+            aspect-ratio: 1;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 2px solid rgba(0, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .opponent-image-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .opponent-image-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #00ffff;
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.1) 0%, rgba(0, 170, 255, 0.1) 100%);
+        }
+        @media (max-width: 480px) {
+            .opponent-image-placeholder {
+                font-size: 2rem;
+            }
+        }
+        .opponent-name {
+            color: #ffffff; 
+            font-size: 0.9rem; 
+            font-weight: bold;
+            margin-bottom: 5px; 
+            text-align: center;
+            line-height: 1.2;
+        }
+        @media (max-width: 480px) {
+            .opponent-name {
+                font-size: 0.8rem;
+            }
+        }
+        .opponent-type {
+            color: #00ffff; 
+            font-size: 0.75rem;
+            text-align: center; 
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        @media (max-width: 480px) {
+            .opponent-type {
+                font-size: 0.7rem;
+            }
+        }
+        .opponent-stats {
+            display: flex; 
+            justify-content: space-around;
+            color: #aaaaaa; 
+            font-size: 0.7rem;
+            margin-top: 8px;
+            gap: 5px;
+        }
+        @media (max-width: 480px) {
+            .opponent-stats {
+                font-size: 0.65rem;
+                flex-wrap: wrap;
+            }
+        }
+        .opponent-stat {
+            text-align: center;
+        }
+        .opponent-stat-value {
+            color: #00ffff; font-weight: bold;
+        }
+        .menu-button {
+            background: linear-gradient(135deg, #00ffff 0%, #00aaff 100%);
+            color: #000; 
+            border: none;
+            padding: 12px 30px; 
+            font-size: 1rem;
+            font-weight: bold; 
+            text-transform: uppercase;
+            letter-spacing: 1.5px; 
+            border-radius: 4px;
+            cursor: pointer; 
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 255, 255, 0.3);
+            margin: 15px auto; 
+            display: block;
+            width: fit-content;
+        }
+        @media (max-width: 480px) {
+            .menu-button {
+                padding: 10px 25px;
+                font-size: 0.9rem;
+                letter-spacing: 1px;
+                width: calc(100% - 20px);
+                max-width: 300px;
+            }
+        }
+        .menu-button:hover {
+            background: linear-gradient(135deg, #00aaff 0%, #00ffff 100%);
+            box-shadow: 0 6px 20px rgba(0, 255, 255, 0.5);
+            transform: translateY(-2px);
+        }
+        .menu-button:active {
+            transform: translateY(0);
+        }
+        .menu-button:disabled {
+            opacity: 0.5; cursor: not-allowed;
+        }
+        .selected-badge {
+            position: absolute; top: 10px; right: 10px;
+            background: #00ff00; color: #000;
+            padding: 4px 8px; border-radius: 4px;
+            font-size: 0.7rem; font-weight: bold;
+            display: none;
+        }
+        .opponent-card.selected .selected-badge {
+            display: block;
+        }
+        
+        /* User Profile Section */
+        .user-profile-section {
+            display: flex; 
+            align-items: center; 
+            gap: 15px;
+            padding: 15px; 
+            background: rgba(0, 0, 0, 0.4);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px; 
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .user-profile-section:hover {
+            background: rgba(0, 0, 0, 0.6);
+            border-color: #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            transform: translateY(-2px);
+        }
+        @media (max-width: 480px) {
+            .user-profile-section {
+                padding: 12px;
+                gap: 12px;
+            }
+        }
+        .user-avatar-container {
+            width: 80px; 
+            height: 80px;
+            flex-shrink: 0;
+            border-radius: 50%;
+            border: 3px solid #00ffff;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+        }
+        .user-avatar-container img {
+            width: 100%; height: 100%;
+            object-fit: cover;
+        }
+        .user-avatar-placeholder {
+            width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            color: #00ffff; font-size: 2rem;
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.1) 0%, rgba(0, 170, 255, 0.1) 100%);
+        }
+        .user-info {
+            flex: 1;
+        }
+        .user-name {
+            color: #00ffff; 
+            font-size: 1.2rem; 
+            font-weight: bold;
+            margin-bottom: 6px; 
+            text-transform: uppercase;
+            text-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
+        }
+        @media (max-width: 480px) {
+            .user-avatar-container {
+                width: 60px;
+                height: 60px;
+            }
+            .user-name {
+                font-size: 1rem;
+            }
+            .user-stats {
+                gap: 10px;
+                font-size: 0.8rem;
+            }
+            .user-stat-value {
+                font-size: 0.95rem;
+            }
+        }
+        .user-stats {
+            display: flex; 
+            gap: 15px;
+            color: #aaaaaa; 
+            font-size: 0.85rem;
+            flex-wrap: wrap;
+        }
+        .user-stat-item {
+            display: flex; flex-direction: column;
+        }
+        .user-stat-label {
+            color: #888888; font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+        .user-stat-value {
+            color: #00ffff; font-size: 1.1rem; font-weight: bold;
+            margin-top: 4px;
+        }
+        
+        /* Player Customization Screen */
+        #player-customization {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(10, 10, 26, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            z-index: 101;
+            display: none; flex-direction: column;
+            pointer-events: auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        #player-customization.visible {
+            display: flex;
+        }
+        .customization-header {
+            text-align: center; 
+            padding: 15px;
+            color: #00ffff; 
+            font-size: 1.5rem; 
+            font-weight: bold;
+            text-transform: uppercase; 
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+            border-bottom: 2px solid rgba(0, 255, 255, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .back-button {
+            background: rgba(0, 255, 255, 0.2);
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            color: #00ffff;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .back-button:hover {
+            background: rgba(0, 255, 255, 0.4);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+        }
+        .customization-content {
+            flex: 1; 
+            padding: 15px;
+            display: flex; 
+            flex-direction: column; 
+            gap: 20px;
+            max-width: 1200px; 
+            margin: 0 auto; 
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .customization-section {
+            background: rgba(0, 0, 0, 0.4);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .customization-section-title {
+            color: #00ffff;
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .weapon-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        @media (max-width: 480px) {
+            .weapon-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+        }
+        .weapon-card {
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        .weapon-card:hover {
+            border-color: #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            transform: translateY(-5px);
+        }
+        .weapon-card.selected {
+            border-color: #00ff00;
+            box-shadow: 0 0 25px rgba(0, 255, 0, 0.7);
+            background: rgba(0, 50, 0, 0.6);
+        }
+        .weapon-icon {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+        .weapon-name {
+            color: #ffffff;
+            font-size: 1rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .weapon-stats {
+            color: #aaaaaa;
+            font-size: 0.8rem;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .weapon-stat {
+            display: flex;
+            justify-content: space-between;
+        }
+        .weapon-stat-value {
+            color: #00ffff;
+            font-weight: bold;
+        }
+        .player-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .status-card {
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+        }
+        .status-card-title {
+            color: #00ffff;
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .status-card-value {
+            color: #ffffff;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        
+        /* Character Customization Screen */
+        #character-customization {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(10, 10, 26, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            z-index: 102;
+            display: none; flex-direction: column;
+            pointer-events: auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        #character-customization.visible {
+            display: flex;
+        }
+        .color-option, .color-option-secondary {
+            transition: all 0.3s ease;
+        }
+        .color-option:hover, .color-option-secondary:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.7) !important;
+        }
+        .color-option.selected, .color-option-secondary.selected {
+            border-color: #00ff00 !important;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.8) !important;
         }
     </style>
 </head>
 <body>
     <div id="game-container"></div>
+    
+    <!-- Character Customization Screen -->
+    <div id="character-customization">
+        <div class="customization-header">
+            <button class="back-button" id="btn-back-from-character">← BACK</button>
+            <div>CHARACTER CUSTOMIZATION</div>
+            <div style="width: 100px;"></div> <!-- Spacer for centering -->
+        </div>
+        <div class="customization-content">
+            <!-- 3D Character Preview -->
+            <div class="customization-section" style="position: relative; min-height: 400px;">
+                <div id="character-preview-container" style="width: 100%; height: 400px; background: rgba(0, 0, 0, 0.5); border-radius: 8px; position: relative; overflow: hidden;">
+                    <!-- Character model will be rendered here -->
+                </div>
+            </div>
+            
+            <!-- Customization Options -->
+            <div class="customization-section">
+                <div class="customization-section-title">CUSTOMIZATION OPTIONS</div>
+                
+                <!-- Color Customization -->
+                <div style="margin-bottom: 20px;">
+                    <div style="color: #00ffff; font-size: 0.9rem; margin-bottom: 10px; font-weight: bold;">PRIMARY COLOR</div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div class="color-option" data-color="#ffffff" style="background: #ffffff; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid #00ffff; box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);"></div>
+                        <div class="color-option" data-color="#00ffff" style="background: #00ffff; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option" data-color="#ff0000" style="background: #ff0000; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option" data-color="#00ff00" style="background: #00ff00; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option" data-color="#ffaa00" style="background: #ffaa00; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option" data-color="#ff00ff" style="background: #ff00ff; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                    </div>
+                </div>
+                
+                <!-- Secondary Color -->
+                <div style="margin-bottom: 20px;">
+                    <div style="color: #00ffff; font-size: 0.9rem; margin-bottom: 10px; font-weight: bold;">SECONDARY COLOR</div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div class="color-option-secondary" data-color="#333333" style="background: #333333; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid #00ffff; box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);"></div>
+                        <div class="color-option-secondary" data-color="#666666" style="background: #666666; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option-secondary" data-color="#000000" style="background: #000000; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                        <div class="color-option-secondary" data-color="#444444" style="background: #444444; width: 50px; height: 50px; border-radius: 8px; cursor: pointer; border: 3px solid transparent;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Player Customization Screen -->
+    <div id="player-customization">
+        <div class="customization-header">
+            <button class="back-button" id="btn-back-to-menu">← BACK</button>
+            <div>PLAYER CUSTOMIZATION</div>
+            <div style="width: 100px;"></div> <!-- Spacer for centering -->
+        </div>
+        <div class="customization-content">
+            <!-- Character Customization Button -->
+            <div class="customization-section">
+                <div class="customization-section-title">CHARACTER CUSTOMIZATION</div>
+                <button class="menu-button" id="btn-customize-character" style="width: 100%; max-width: none;">
+                    CUSTOMIZE CHARACTER
+                </button>
+            </div>
+            
+            <!-- Weapon Selection -->
+            <div class="customization-section">
+                <div class="customization-section-title">SELECT WEAPON</div>
+                <div class="weapon-grid" id="weapon-grid">
+                    <!-- Weapons will be generated here -->
+                </div>
+            </div>
+            
+            <!-- Player Status -->
+            <div class="customization-section">
+                <div class="customization-section-title">PLAYER STATUS</div>
+                <div class="player-status-grid">
+                    <div class="status-card">
+                        <div class="status-card-title">Total Wins</div>
+                        <div class="status-card-value" id="status-wins">0</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-title">Total Credits</div>
+                        <div class="status-card-value" id="status-credits">0</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-title">Current Rank</div>
+                        <div class="status-card-value" id="status-rank">Rookie</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-title">Selected Weapon</div>
+                        <div class="status-card-value" id="status-weapon">Pistol</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-title">Selected Character</div>
+                        <div class="status-card-value" id="status-character">Operator</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Main Menu -->
+    <!-- Login/Registration Screen -->
+    <div id="login-screen">
+        <div class="login-container">
+            <div class="login-title">GUN BATTLE</div>
+            <div class="login-tabs">
+                <div class="login-tab active" id="tab-login">LOGIN</div>
+                <div class="login-tab" id="tab-register">REGISTER</div>
+            </div>
+            
+            <!-- Login Form -->
+            <div id="login-form" class="login-form">
+                <input type="text" id="login-username" class="login-input" placeholder="Username" maxlength="20" autocomplete="username">
+                <input type="password" id="login-password" class="login-input" placeholder="Password" maxlength="50" autocomplete="current-password">
+                <button class="login-button" id="btn-login">LOGIN</button>
+                <div class="login-error" id="login-error"></div>
+            </div>
+            
+            <!-- Registration Form -->
+            <div id="register-form" class="login-form" style="display: none;">
+                <input type="text" id="register-username" class="login-input" placeholder="Username (3-20 chars)" maxlength="20" autocomplete="username">
+                <input type="password" id="register-password" class="login-input" placeholder="Password (min 6 chars)" maxlength="50" autocomplete="new-password">
+                <input type="password" id="register-confirm" class="login-input" placeholder="Confirm Password" maxlength="50" autocomplete="new-password">
+                <button class="login-button" id="btn-register">CREATE ACCOUNT</button>
+                <div class="login-error" id="register-error"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="main-menu" class="hidden">
+        <div class="menu-header">
+            <div style="width: 100px;"></div> <!-- Spacer -->
+            <div>SELECT OPPONENT</div>
+            <button class="logout-button" id="btn-logout">LOGOUT</button>
+        </div>
+        <div class="menu-content">
+            <!-- User Profile Section -->
+            <div class="user-profile-section">
+                <div class="user-avatar-container" id="user-avatar-container">
+                    <div class="user-avatar-placeholder">👤</div>
+                    <!-- <img id="user-avatar-img" src="" alt="User Avatar" style="display: none;"> -->
+                </div>
+                <div class="user-info">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div class="user-name" id="user-name">OPERATOR</div>
+                        <button id="btn-edit-username" style="background: rgba(0, 255, 255, 0.3); border: 1px solid #00ffff; color: #00ffff; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem;">EDIT</button>
+                    </div>
+                    <div class="user-stats">
+                        <div class="user-stat-item">
+                            <div class="user-stat-label">Rank</div>
+                            <div class="user-stat-value" id="user-rank">Rookie</div>
+                        </div>
+                        <div class="user-stat-item">
+                            <div class="user-stat-label">Wins</div>
+                            <div class="user-stat-value" id="user-wins">0</div>
+                        </div>
+                        <div class="user-stat-item">
+                            <div class="user-stat-label">Credits</div>
+                            <div class="user-stat-value" id="user-credits">0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Username Edit Modal -->
+            <div id="username-edit-modal" class="hidden" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); z-index: 300; display: flex; align-items: center; justify-content: center;">
+                <div style="background: rgba(26, 26, 46, 0.95); padding: 30px; border-radius: 8px; border: 2px solid #00ffff; max-width: 400px; width: 90%;">
+                    <h2 style="color: #00ffff; margin-bottom: 20px; text-align: center;">EDIT USERNAME</h2>
+                    <input type="text" id="username-input" placeholder="Enter username" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.5); border: 2px solid #00ffff; color: white; border-radius: 4px; font-size: 1rem; margin-bottom: 20px; box-sizing: border-box;" maxlength="20">
+                    <div style="display: flex; gap: 10px;">
+                        <button id="btn-save-username" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #00ffff 0%, #00aaff 100%); color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">SAVE</button>
+                        <button id="btn-cancel-username" style="flex: 1; padding: 12px; background: rgba(255, 0, 0, 0.7); color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">CANCEL</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Challenge Player Section -->
+            
+            <div class="menu-section-title">Available Targets</div>
+            <div class="opponent-grid" id="opponent-grid">
+                <!-- Opponents will be generated here -->
+            </div>
+            
+            <!-- Matchmaking UI -->
+            <div id="matchmaking-ui" class="hidden" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
+                <div style="text-align: center; padding: 20px;">
+                    <h2 style="color: #00ffff; margin-bottom: 20px;">MATCHMAKING</h2>
+                    <div id="matchmaking-status" style="font-size: 1.2rem; margin-bottom: 20px;">Searching for opponent...</div>
+                    <div id="matchmaking-spinner" style="width: 50px; height: 50px; border: 4px solid rgba(0, 255, 255, 0.3); border-top: 4px solid #00ffff; border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto;"></div>
+                    <button id="btn-cancel-matchmaking" style="padding: 10px 20px; background: rgba(255, 0, 0, 0.7); color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px;">CANCEL</button>
+                </div>
+            </div>
+            <style>
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                #matchmaking-ui.hidden {
+                    display: none !important;
+                }
+            </style>
+        </div>
+        
+        <!-- Challenge Popup (In-Game) -->
+        <div id="challenge-popup" class="hidden" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 300; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
+            <div style="text-align: center; padding: 30px; background: rgba(0, 20, 40, 0.95); border: 2px solid #00ffff; border-radius: 8px; max-width: 400px; width: 90%;">
+                <h2 style="color: #00ffff; margin-bottom: 20px; text-transform: uppercase;">CHALLENGE RECEIVED</h2>
+                <div id="challenge-challenger-name" style="font-size: 1.5rem; color: #00ff00; margin-bottom: 20px; font-weight: bold;"></div>
+                <div style="font-size: 1rem; color: #aaa; margin-bottom: 30px;">wants to battle you!</div>
+                <div style="display: flex; gap: 15px; justify-content: center;">
+                    <button id="btn-accept-challenge" style="padding: 15px 30px; background: linear-gradient(135deg, #00ff00 0%, #00aa00 100%); color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 1rem; min-width: 120px;">ACCEPT</button>
+                    <button id="btn-reject-challenge" style="padding: 15px 30px; background: linear-gradient(135deg, #ff0000 0%, #aa0000 100%); color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 1rem; min-width: 120px;">REJECT</button>
+                </div>
+            </div>
+        </div>
+        <style>
+            #challenge-popup.hidden {
+                display: none !important;
+            }
+        </style>
+    </div>
+    
     <div id="ui-layer">
-        <button id="btn-start">TAP TO START</button>
         <div id="hud">STATUS: WAITING</div>
         <div id="crosshair"></div>
         
@@ -141,8 +1104,23 @@
             <div id="health-bar-label">HEALTH</div>
         </div>
         
-        <!-- Ammo Count -->
-        <div id="ammo-count">30</div>
+        <!-- Ammo Count - Bullet Display -->
+        <div id="ammo-count">
+            <div class="bullet"></div>
+            <div class="bullet"></div>
+            <div class="bullet"></div>
+            <div class="bullet"></div>
+            <div class="bullet"></div>
+            <div class="bullet"></div>
+        </div>
+        
+        <!-- Dodge Button (Mobile-friendly) -->
+        <button id="dodge-button" class="dodge-button">
+            <span class="dodge-icon">⚡</span>
+            <span class="dodge-label">DODGE</span>
+            <div class="dodge-cooldown-overlay"></div>
+        </button>
+        
     </div>
     <script type="module" src="/main.js"></script>
 </body>
