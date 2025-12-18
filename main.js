@@ -698,6 +698,12 @@ const opponents = [
 let reticleX = 0; // Horizontal position (-1 to 1)
 let reticleY = 0; // Vertical position (-1 to 1)
 
+// Gyroscope calibration and smoothing
+let gyroCalibration = { alpha: 0, beta: 0, gamma: 0 }; // Calibration offsets
+let gyroSmoothing = 0.15; // Smoothing factor (0-1, lower = smoother)
+let lastGyroValues = { alpha: 0, beta: 0, gamma: 0 };
+let gyroEnabled = false;
+
 
 // --- 2. Gun Controller Integration ---
 
@@ -1168,21 +1174,68 @@ const gun = new GunController({
     onAim: ({ alpha, beta, gamma }) => {
         // Device orientation now only affects reticle position, not camera rotation
         // Camera stays fixed - only reticle moves (works even when holstered)
-        if (!gameStarted || !orientationEnabled) return;
+        if (!gameStarted || !gyroEnabled) {
+            if (!gameStarted) console.log('Gyro blocked: game not started');
+            if (!gyroEnabled) console.log('Gyro blocked: gyro not enabled');
+            return;
+        }
         
         // Check for valid orientation values
-        if (alpha === null || beta === null || gamma === null) return;
+        if (alpha === null || beta === null || gamma === null) {
+            console.log('Invalid orientation values:', { alpha, beta, gamma });
+            return;
+        }
+        
+        // Auto-calibrate on first valid reading
+        if (gyroCalibration.alpha === 0 && gyroCalibration.beta === 0 && gyroCalibration.gamma === 0) {
+            gyroCalibration.alpha = alpha;
+            gyroCalibration.beta = beta;
+            gyroCalibration.gamma = gamma;
+            console.log('Gyroscope auto-calibrated:', gyroCalibration);
+        }
+        
+        // Apply calibration offsets
+        const calibratedAlpha = alpha - gyroCalibration.alpha;
+        const calibratedBeta = beta - gyroCalibration.beta;
+        const calibratedGamma = gamma - gyroCalibration.gamma;
+        
+        // Smooth the gyroscope values to reduce jitter
+        lastGyroValues.alpha = lastGyroValues.alpha + (calibratedAlpha - lastGyroValues.alpha) * (1 - gyroSmoothing);
+        lastGyroValues.beta = lastGyroValues.beta + (calibratedBeta - lastGyroValues.beta) * (1 - gyroSmoothing);
+        lastGyroValues.gamma = lastGyroValues.gamma + (calibratedGamma - lastGyroValues.gamma) * (1 - gyroSmoothing);
         
         // Convert device orientation to reticle position
-        // Map orientation angles to screen coordinates
-        const normalizedAlpha = (alpha / 360) * 2 - 1; // -1 to 1
-        const normalizedBeta = (beta / 180); // -1 to 1
+        // Use gamma (left/right tilt) for horizontal movement
+        // Use beta (front/back tilt) for vertical movement
+        // Map orientation angles to screen coordinates with sensitivity adjustment
+        const sensitivity = 1.5; // Increased sensitivity for better mobile response
+        const normalizedGamma = (lastGyroValues.gamma / 45) * sensitivity; // More sensitive - 45 degrees = full range
+        const normalizedBeta = (lastGyroValues.beta / 45) * sensitivity; // More sensitive - 45 degrees = full range
         
-        reticleX = THREE.MathUtils.clamp(normalizedAlpha, -1, 1);
-        reticleY = THREE.MathUtils.clamp(-normalizedBeta, -1, 1);
+        // Update reticle position with smoothing
+        const targetX = THREE.MathUtils.clamp(normalizedGamma, -1, 1);
+        const targetY = THREE.MathUtils.clamp(-normalizedBeta, -1, 1);
+        
+        reticleX = reticleX + (targetX - reticleX) * 0.5; // Increased smoothing speed for better response
+        reticleY = reticleY + (targetY - reticleY) * 0.5;
+        
+        // Debug: Log occasionally to verify movement
+        if (Math.random() < 0.005) { // Log 0.5% of the time
+            console.log('Gyro movement:', { 
+                calibratedGamma, 
+                normalizedGamma, 
+                targetX, 
+                reticleX,
+                calibratedBeta,
+                normalizedBeta,
+                targetY,
+                reticleY
+            });
+        }
         
         // Update crosshair visual position based on reticle
         const crosshair = document.getElementById('crosshair');
+        if (!crosshair) return;
         const rect = renderer.domElement.getBoundingClientRect();
         const screenX = ((reticleX + 1) / 2) * rect.width;
         const screenY = ((1 - reticleY) / 2) * rect.height;
@@ -2264,6 +2317,14 @@ function showLoginScreen() {
 function hideLoginScreen() {
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('main-menu').classList.remove('hidden');
+    
+    // Request gyroscope permission for mobile devices after login
+    if (isMobileDevice() && !gyroscopePermissionGranted) {
+        setTimeout(async () => {
+            const granted = await initializeGyroscopePermission();
+            gyroscopePermissionGranted = granted;
+        }, 500);
+    }
 }
 
 function switchToLogin() {
@@ -2639,8 +2700,196 @@ if (document.readyState === 'loading') {
     setupReloadButton();
 }
 
+// Mobile device detection
+function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+           (typeof window.orientation !== 'undefined') ||
+           ('ontouchstart' in window) ||
+           (navigator.maxTouchPoints > 0);
+}
+
+// Request gyroscope permission for mobile devices
+async function requestGyroscopePermission() {
+    if (!isMobileDevice()) {
+        console.log('Not a mobile device, skipping gyroscope permission request');
+        return false;
+    }
+    
+    // Check if DeviceOrientationEvent is available
+    if (typeof DeviceOrientationEvent === 'undefined') {
+        console.log('DeviceOrientationEvent not supported');
+        return false;
+    }
+    
+    // Check if permission API is available (iOS 13+)
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+            const response = await DeviceOrientationEvent.requestPermission();
+            if (response === 'granted') {
+                console.log('Gyroscope permission granted');
+                // Add listeners immediately after permission is granted
+                gun.addListeners();
+                gyroEnabled = true;
+                return true;
+            } else {
+                console.log('Gyroscope permission denied:', response);
+                return false;
+            }
+        } catch (error) {
+            console.error('Error requesting gyroscope permission:', error);
+            return false;
+        }
+    } else {
+        // Android or older iOS - permission not required, but check if events work
+        console.log('Gyroscope permission not required (Android or older iOS)');
+        // Add listeners for Android/older iOS
+        gun.addListeners();
+        gyroEnabled = true;
+        return true;
+    }
+}
+
+// Show permission request modal
+function showGyroscopePermissionModal() {
+    return new Promise((resolve) => {
+        // Create modal overlay
+        const modal = document.createElement('div');
+        modal.id = 'gyro-permission-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+        `;
+        
+        const content = document.createElement('div');
+        content.style.cssText = `
+            background: #1a1a1a;
+            border: 2px solid #00ffff;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            color: #ffffff;
+        `;
+        
+        const title = document.createElement('h2');
+        title.textContent = 'Enable Gyroscope';
+        title.style.cssText = 'margin: 0 0 20px 0; color: #00ffff; font-size: 1.5rem;';
+        
+        const message = document.createElement('p');
+        message.textContent = 'This game uses your device\'s gyroscope for aiming. Please allow access to device motion and orientation.';
+        message.style.cssText = 'margin: 0 0 30px 0; line-height: 1.5; color: #cccccc;';
+        
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.cssText = 'display: flex; gap: 15px; justify-content: center;';
+        
+        const allowButton = document.createElement('button');
+        allowButton.textContent = 'ALLOW';
+        allowButton.style.cssText = `
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #00ffff, #0088ff);
+            color: #000;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            flex: 1;
+        `;
+        
+        const skipButton = document.createElement('button');
+        skipButton.textContent = 'SKIP';
+        skipButton.style.cssText = `
+            padding: 12px 30px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border: 2px solid #666;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            flex: 1;
+        `;
+        
+        allowButton.addEventListener('click', async () => {
+            console.log('User clicked ALLOW for gyroscope permission');
+            const granted = await requestGyroscopePermission();
+            console.log('Permission result:', granted);
+            modal.remove();
+            if (granted) {
+                // Show success message
+                const hud = document.getElementById('hud');
+                if (hud) {
+                    hud.innerText = 'GYROSCOPE ENABLED - Tilt device to aim!';
+                    hud.style.color = '#00ff00';
+                    setTimeout(() => {
+                        hud.style.color = '';
+                        if (!gameStarted) {
+                            hud.innerText = 'STATUS: WAITING';
+                        }
+                    }, 3000);
+                }
+            }
+            resolve(granted);
+        });
+        
+        skipButton.addEventListener('click', () => {
+            modal.remove();
+            resolve(false);
+        });
+        
+        content.appendChild(title);
+        content.appendChild(message);
+        buttonContainer.appendChild(allowButton);
+        buttonContainer.appendChild(skipButton);
+        content.appendChild(buttonContainer);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+    });
+}
+
+// Initialize gyroscope permission on mobile devices
+async function initializeGyroscopePermission() {
+    if (isMobileDevice()) {
+        console.log('Mobile device detected, requesting gyroscope permission...');
+        const granted = await showGyroscopePermissionModal();
+        if (granted) {
+            console.log('Gyroscope permission granted, ready to use');
+        } else {
+            console.log('Gyroscope permission not granted, will use touch controls');
+        }
+        return granted;
+    }
+    return false;
+}
+
+// Store gyroscope permission status
+let gyroscopePermissionGranted = false;
+
 // Initialize on load
 initializeAuth();
+
+// Request gyroscope permission for mobile devices
+// This will be called after user logs in
+async function requestGyroscopePermissionOnLogin() {
+    if (isMobileDevice() && !gyroscopePermissionGranted) {
+        const granted = await initializeGyroscopePermission();
+        gyroscopePermissionGranted = granted;
+        return granted;
+    }
+    return false;
+}
 
 // Logout button handler (set up after menu is initialized)
 function setupLogoutButton() {
@@ -3015,11 +3264,33 @@ function showMatchmakingError(message) {
 
 async function startPvPGame(data) {
     // Initialize gun controller first (like single-player)
-    const success = await gun.initialize();
-    if (!success) {
-        alert("Sensors not enabled. Check browser permissions.");
-        document.getElementById('main-menu').classList.remove('hidden');
-        return;
+    // If permission was already granted, just add listeners
+    let success = false;
+    if (gyroscopePermissionGranted) {
+        // Permission already granted, just add listeners
+        console.log('Gyroscope permission already granted, adding listeners...');
+        gun.addListeners();
+        gyroEnabled = true;
+        success = true;
+    } else {
+        // Request permission
+        success = await gun.initialize();
+        if (success) {
+            gyroEnabled = true;
+            gyroscopePermissionGranted = true;
+        }
+    }
+    
+    if (success) {
+        // Reset calibration
+        gyroCalibration = { alpha: 0, beta: 0, gamma: 0 };
+        lastGyroValues = { alpha: 0, beta: 0, gamma: 0 };
+        console.log('Gyroscope enabled - tilt your device to aim!');
+        console.log('Game started:', gameStarted, 'Gyro enabled:', gyroEnabled);
+    } else {
+        console.warn('Gyroscope not available, will use touch controls');
+        gyroEnabled = false;
+        // Don't show alert, just continue with touch controls
     }
     
     // Remove UI layer background (like single-player)
@@ -3201,10 +3472,37 @@ if (document.readyState === 'loading') {
 
 // --- 3. Start Sequence ---
 async function startGame(opponentData) {
-    const success = await gun.initialize();
+    // Initialize gun controller
+    // If permission was already granted, just add listeners
+    let success = false;
+    if (gyroscopePermissionGranted) {
+        // Permission already granted, just add listeners
+        console.log('Gyroscope permission already granted, adding listeners...');
+        gun.addListeners();
+        gyroEnabled = true;
+        success = true;
+    } else {
+        // Request permission
+        success = await gun.initialize();
+        if (success) {
+            gyroEnabled = true;
+            gyroscopePermissionGranted = true;
+        }
+    }
+    
     if (success) {
-        document.getElementById('ui-layer').style.background = 'none';
-        document.getElementById('ui-layer').style.pointerEvents = 'none';
+        // Reset calibration
+        gyroCalibration = { alpha: 0, beta: 0, gamma: 0 };
+        lastGyroValues = { alpha: 0, beta: 0, gamma: 0 };
+        console.log('Gyroscope enabled - tilt your device to aim!');
+        console.log('Game started:', gameStarted, 'Gyro enabled:', gyroEnabled);
+    } else {
+        console.warn('Gyroscope not available, will use touch controls');
+        gyroEnabled = false;
+    }
+    
+    document.getElementById('ui-layer').style.background = 'none';
+    document.getElementById('ui-layer').style.pointerEvents = 'none';
         
         // Apply opponent stats
         opponentHealth = opponentData.health;
@@ -3285,12 +3583,6 @@ async function startGame(opponentData) {
         updateHealthBar();
         updateAmmoCount();
         updateOpponentHealthBar();
-        
-    } else {
-        alert("Sensors not enabled. Check browser permissions.");
-        // Show menu again if initialization fails
-        document.getElementById('main-menu').classList.remove('hidden');
-    }
 }
 
 // --- 4. Render Loop & Tweening ---
@@ -3462,8 +3754,12 @@ function setupMouseLook() {
     const crosshair = document.getElementById('crosshair');
     
     // Update reticle position based on mouse/touch (works even when holstered)
+    // Only works if gyroscope is NOT enabled (fallback for desktop)
     const updateReticle = (clientX, clientY) => {
         if (!gameStarted) return;
+        
+        // If gyroscope is enabled, don't override with mouse/touch
+        if (gyroEnabled) return;
         
         // Convert screen coordinates to normalized device coordinates (-1 to 1)
         const rect = renderer.domElement.getBoundingClientRect();
@@ -3485,17 +3781,100 @@ function setupMouseLook() {
     };
     
     // Touch move handler
+    let isDragging = false;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    
+    const handleTouchStart = (e) => {
+        if (e.touches.length === 1) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            isDragging = false;
+        }
+    };
+    
     const handleTouchMove = (e) => {
         if (!gameStarted) return;
         if (e.touches.length === 1) {
-            e.preventDefault();
-            updateReticle(e.touches[0].clientX, e.touches[0].clientY);
+            // Check if this is a drag (movement > 10px)
+            const deltaX = Math.abs(e.touches[0].clientX - touchStartX);
+            const deltaY = Math.abs(e.touches[0].clientY - touchStartY);
+            if (deltaX > 10 || deltaY > 10) {
+                isDragging = true;
+            }
+            
+            if (!gyroEnabled) {
+                e.preventDefault();
+                updateReticle(e.touches[0].clientX, e.touches[0].clientY);
+            }
         }
     };
     
     // Add event listeners
     document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('touchstart', handleTouchStart, { passive: true });
     document.addEventListener('touchmove', handleTouchMove, { passive: false });
+    
+    // Double-tap/click to recalibrate gyroscope
+    let lastTapTime = 0;
+    let lastMouseClickTime = 0;
+    
+    document.addEventListener('touchend', (e) => {
+        if (!isDragging) {
+            const now = Date.now();
+            if (lastTapTime && now - lastTapTime < 300) {
+                // Double tap detected - recalibrate gyroscope
+                recalibrateGyroscope();
+                const hud = document.getElementById('hud');
+                if (hud) {
+                    const originalText = hud.innerText;
+                    hud.innerText = "GYROSCOPE RECALIBRATED";
+                    hud.style.color = "#00ffff";
+                    setTimeout(() => {
+                        hud.style.color = "";
+                        hud.innerText = originalText;
+                    }, 1000);
+                }
+            }
+            lastTapTime = now;
+        }
+        isDragging = false; // Reset after touch end
+    });
+    
+    document.addEventListener('click', (e) => {
+        const now = Date.now();
+        if (lastMouseClickTime && now - lastMouseClickTime < 300) {
+            // Double click detected - recalibrate gyroscope
+            recalibrateGyroscope();
+            const hud = document.getElementById('hud');
+            if (hud) {
+                const originalText = hud.innerText;
+                hud.innerText = "GYROSCOPE RECALIBRATED";
+                hud.style.color = "#00ffff";
+                setTimeout(() => {
+                    hud.style.color = "";
+                    hud.innerText = originalText;
+                }, 1000);
+            }
+        }
+        lastMouseClickTime = now;
+    });
+}
+
+// Calibrate gyroscope (sets current position as center)
+function calibrateGyroscope() {
+    // Calibration happens automatically when orientation data arrives
+    // This function is called to trigger calibration
+    console.log('Gyroscope calibration ready');
+}
+
+// Function to manually recalibrate gyroscope
+function recalibrateGyroscope() {
+    // Reset calibration to current position
+    gyroCalibration = { ...lastGyroValues };
+    reticleX = 0;
+    reticleY = 0;
+    console.log('Gyroscope recalibrated');
 }
 
 // Handle Resize

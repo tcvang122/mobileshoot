@@ -32,8 +32,20 @@ export class GunController {
     }
 
     addListeners() {
-        window.addEventListener('deviceorientation', this.handleOrientation.bind(this));
-        window.addEventListener('devicemotion', this.handleMotion.bind(this));
+        // Remove existing listeners if any
+        if (this._orientationHandler) {
+            window.removeEventListener('deviceorientation', this._orientationHandler);
+            window.removeEventListener('devicemotion', this._motionHandler);
+        }
+        
+        this._orientationHandler = this.handleOrientation.bind(this);
+        this._motionHandler = this.handleMotion.bind(this);
+        
+        window.addEventListener('deviceorientation', this._orientationHandler);
+        window.addEventListener('devicemotion', this._motionHandler);
+        
+        console.log('Device orientation listeners added');
+        console.log('Waiting for orientation events...');
         
         // Debugging: Space to toggle holster
         window.addEventListener('keydown', (e) => {
@@ -46,6 +58,15 @@ export class GunController {
 
     handleOrientation(event) {
         const { alpha, beta, gamma } = event;
+        
+        // Debug: Log first few orientation events
+        if (!this._orientationLogged) {
+            console.log('Device orientation event received:', { alpha, beta, gamma });
+            this._orientationLogged = true;
+            setTimeout(() => {
+                this._orientationLogged = false; // Reset after 5 seconds
+            }, 5000);
+        }
         
         // Pass orientation data to the aim callback
         this.onAim({ alpha, beta, gamma });
