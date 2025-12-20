@@ -1,6 +1,7 @@
 // Authentication and Account Management
 
 import * as gameState from './gameState.js';
+import { setCurrentUser, setIsAuthenticated, setUserStats, setSocket, setOnlinePlayersList } from './gameState.js';
 import { ACCOUNTS_KEY, CURRENT_USER_KEY } from './config.js';
 
 // Account storage functions
@@ -46,7 +47,8 @@ export function createAccount(username, password) {
             wins: 0,
             credits: 0,
             avatar: null,
-            selectedWeapon: 'pistol',
+            selectedWeapon: 'sword',
+            selectedCharacter: 'default',
             characterCustomization: {
                 primaryColor: '#ffffff',
                 secondaryColor: '#333333'
@@ -71,12 +73,12 @@ export function loginAccount(username, password) {
         return { success: false, error: 'Incorrect password' };
     }
     
-    gameState.currentUser = username.toLowerCase();
-    gameState.userStats = { ...account.stats };
-    gameState.isAuthenticated = true;
+    setCurrentUser(username.toLowerCase());
+    setUserStats({ ...account.stats });
+    setIsAuthenticated(true);
     
     try {
-        localStorage.setItem(CURRENT_USER_KEY, gameState.currentUser);
+        localStorage.setItem(CURRENT_USER_KEY, username.toLowerCase());
     } catch (e) {
         console.warn('Failed to save session:', e);
     }
@@ -91,9 +93,9 @@ export function checkSession() {
             const accounts = getAccounts();
             const account = accounts[savedUser];
             if (account) {
-                gameState.currentUser = savedUser;
-                gameState.userStats = { ...account.stats };
-                gameState.isAuthenticated = true;
+                setCurrentUser(savedUser);
+                setUserStats({ ...account.stats });
+                setIsAuthenticated(true);
                 return true;
             }
         }
@@ -110,24 +112,25 @@ export function logout() {
     
     if (gameState.socket && gameState.socket.connected) {
         gameState.socket.disconnect();
-        gameState.socket = null;
+        setSocket(null);
     }
     
-    gameState.currentUser = null;
-    gameState.isAuthenticated = false;
-    gameState.userStats = {
+    setCurrentUser(null);
+    setIsAuthenticated(false);
+    setUserStats({
         name: "OPERATOR",
         rank: "Rookie",
         wins: 0,
         credits: 0,
         avatar: null,
-        selectedWeapon: 'pistol',
+        selectedWeapon: 'sword',
+        selectedCharacter: 'default',
         characterCustomization: {
             primaryColor: '#ffffff',
             secondaryColor: '#333333'
         }
-    };
-    gameState.onlinePlayersList = [];
+    });
+    setOnlinePlayersList([]);
     
     try {
         localStorage.removeItem(CURRENT_USER_KEY);
@@ -157,12 +160,25 @@ export function loadUserStats() {
         const accounts = getAccounts();
         const account = accounts[gameState.currentUser];
         if (account && account.stats) {
-            gameState.userStats = { ...gameState.userStats, ...account.stats };
+            setUserStats({ ...gameState.userStats, ...account.stats });
+            
+            // Migrate old weapon selection to new melee weapons
+            if (gameState.userStats.selectedWeapon === 'pistol' || gameState.userStats.selectedWeapon === 'rifle') {
+                gameState.userStats.selectedWeapon = 'sword';
+                // Save the migration
+                saveUserStats();
+            }
+            
             if (!gameState.userStats.characterCustomization) {
                 gameState.userStats.characterCustomization = {
                     primaryColor: '#ffffff',
                     secondaryColor: '#333333'
                 };
+            }
+            
+            // Ensure selectedCharacter exists
+            if (!gameState.userStats.selectedCharacter) {
+                gameState.userStats.selectedCharacter = 'default';
             }
         }
     } catch (e) {

@@ -2,14 +2,37 @@
 
 import * as THREE from 'three';
 import * as gameState from './gameState.js';
-import { weapons } from './config.js';
+import { setGameStarted, setOpponentHealth, setPlayerHealth, setLastAttackTime, setLastImportantMessageTime, setEnemyAttackPhase, setEnemyPatternType, setEnemyPatternAttackCount, setEnemyNextPatternTime, setOpponentLastAttackTime, setOrientationEnabled, setIsAttacking, setAttackCooldown, setOPPONENT_ATTACK_INTERVAL, setOpponentIncomingAttackDirection, setOpponentAttackWindupTime, setOpponentCurrentDirection, setOpponentGuardDirection, setPlayerStamina, setParryWindow, setOpponentAttackType } from './gameState.js';
+import { weapons, ATTACK_TYPES, ATTACK_COOLDOWN, OPPONENT_ATTACK_WINDUP_TIME, PARRY_WINDOW, GUARD_DIRECTIONS, BLOCK_TIMING_SLIDER_DURATION } from './config.js';
+import { updateOpponentAttackIndicator, showBlockNotification, showBlockTimingSlider, triggerBlockTiming, hideBlockTimingSlider } from './ui.js';
+import { combatController } from './controls.js';
 import { scene, camera, renderer } from './sceneSetup.js';
 import { gunGroup, muzzleLight, opponentGroup, opponentModel, opponentMixer, opponentActions, opponentMuzzleLight } from './gameObjects.js';
-import { updateHealthBar, updateAmmoCount, updateOpponentHealthBar, updateHUD } from './ui.js';
+import { updateHealthBar, updateDirectionIndicator, updateOpponentHealthBar, updateStaminaBar, updateHUD } from './ui.js';
 import { saveUserStats, updateRank } from './auth.js';
 
 // TWEEN implementation (simplified)
 const TWEEN = {
+    tweens: [],
+    getAll() { return this.tweens; },
+    removeAll() { this.tweens = []; },
+    add(tween) { this.tweens.push(tween); },
+    remove(tween) {
+        const i = this.tweens.indexOf(tween);
+        if (i !== -1) this.tweens.splice(i, 1);
+    },
+    update(time) {
+        if (this.tweens.length === 0) return false;
+        let i = 0;
+        while (i < this.tweens.length) {
+            if (this.tweens[i].update(time)) {
+                i++;
+            } else {
+                this.tweens.splice(i, 1);
+            }
+        }
+        return true;
+    },
     Easing: {
         Quadratic: {
             Out: (t) => t * (2 - t),
@@ -34,53 +57,43 @@ const TWEEN = {
             this.object = object;
             this.valuesStart = {};
             this.valuesEnd = {};
-            this.duration = 0;
-            this.startTime = 0;
-            this.easingFunction = (t) => t;
+            this.duration = 1000;
+            this.startTime = null;
+            this.easingFunction = TWEEN.Easing.Quadratic.Out;
             this.onUpdateCallback = null;
             this.onCompleteCallback = null;
         }
-        to(values, duration) {
-            this.valuesEnd = values;
-            this.duration = duration;
+        to(properties, duration) {
+            this.valuesEnd = properties;
+            if (duration !== undefined) this.duration = duration;
             return this;
         }
-        easing(fn) {
-            this.easingFunction = fn;
-            return this;
-        }
-        onUpdate(callback) {
-            this.onUpdateCallback = callback;
-            return this;
-        }
-        onComplete(callback) {
-            this.onCompleteCallback = callback;
-            return this;
-        }
-        start() {
-            this.startTime = performance.now();
+        start(time) {
+            TWEEN.add(this);
+            this.startTime = time !== undefined ? time : performance.now();
             for (const property in this.valuesEnd) {
-                this.valuesStart[property] = this.object[property];
+                this.valuesStart[property] = parseFloat(this.object[property]);
             }
-            const update = () => {
-                const time = performance.now();
-                let elapsed = time - this.startTime;
-                const isComplete = elapsed >= this.duration;
-                if (isComplete) elapsed = this.duration;
-                const value = this.easingFunction(elapsed / this.duration);
-                for (const property in this.valuesEnd) {
-                    const start = this.valuesStart[property];
-                    const end = this.valuesEnd[property];
-                    this.object[property] = start + (end - start) * value;
-                }
-                if (this.onUpdateCallback) this.onUpdateCallback(this.object);
-                if (isComplete && this.onCompleteCallback) {
-                    this.onCompleteCallback();
-                } else if (!isComplete) {
-                    requestAnimationFrame(update);
-                }
-            };
-            update();
+            return this;
+        }
+        easing(easing) { this.easingFunction = easing; return this; }
+        onUpdate(callback) { this.onUpdateCallback = callback; return this; }
+        onComplete(callback) { this.onCompleteCallback = callback; return this; }
+        update(time) {
+            let elapsed = (time || performance.now()) - this.startTime;
+            const isComplete = elapsed >= this.duration;
+            if (isComplete) elapsed = this.duration;
+            const value = this.easingFunction(elapsed / this.duration);
+            for (const property in this.valuesEnd) {
+                const start = this.valuesStart[property];
+                const end = this.valuesEnd[property];
+                this.object[property] = start + (end - start) * value;
+            }
+            if (this.onUpdateCallback) this.onUpdateCallback(this.object);
+            if (isComplete && this.onCompleteCallback) {
+                this.onCompleteCallback();
+            }
+            return !isComplete;
         }
     }
 };
@@ -107,15 +120,16 @@ export function getEnemyAttackPattern(phase) {
         };
         
         const availablePatterns = patterns[phase] || ['single'];
-        gameState.enemyPatternType = availablePatterns[Math.floor(Math.random() * availablePatterns.length)];
-        gameState.enemyPatternShotCount = 0;
+        const selectedPattern = availablePatterns[Math.floor(Math.random() * availablePatterns.length)];
+        setEnemyPatternType(selectedPattern);
+        setEnemyPatternAttackCount(0);
         
         const patternDurations = {
             'single': 2000,
             'burst': 3000,
             'rapid': 4000
         };
-        gameState.enemyNextPatternTime = now + (patternDurations[gameState.enemyPatternType] || 2000);
+        setEnemyNextPatternTime(now + (patternDurations[selectedPattern] || 2000));
     }
     
     return gameState.enemyPatternType;
@@ -152,15 +166,9 @@ export function playOpponentAnimation(animationName, loop = true, fadeIn = 0.3) 
 export function updateOpponentAnimation() {
     if (!opponentMixer || gameState.opponentHealth <= 0) return;
     
-    const isMoving = Math.abs(opponentGroup.position.x - (Math.sin(Date.now() * 0.001) * 8)) < 0.1;
-    
+    // Opponent is stationary, always use Idle animation
     if (gameState.opponentHealth <= 0) {
         playOpponentAnimation('Death', false);
-    } else if (isMoving && (opponentActions['Walk'] || opponentActions['walk'] || opponentActions['Running'])) {
-        const walkAnim = opponentActions['Walk'] || opponentActions['walk'] || opponentActions['Running'];
-        if (opponentGroup.userData.currentAnimation !== walkAnim) {
-            playOpponentAnimation('Walk', true);
-        }
     } else if (opponentActions['Idle'] || opponentActions['idle']) {
         const idleAnim = opponentActions['Idle'] || opponentActions['idle'];
         if (opponentGroup.userData.currentAnimation !== idleAnim) {
@@ -169,15 +177,16 @@ export function updateOpponentAnimation() {
     }
 }
 
-// Opponent shooting
-export function opponentShoot() {
+// Opponent melee attack
+export function opponentAttack() {
     if (!gameState.gameStarted || gameState.opponentHealth <= 0 || gameState.playerHealth <= 0) return;
     
     const now = Date.now();
-    gameState.enemyAttackPhase = getEnemyAttackPhase();
-    const pattern = getEnemyAttackPattern(gameState.enemyAttackPhase);
+    const newPhase = getEnemyAttackPhase();
+    setEnemyAttackPhase(newPhase);
+    const pattern = getEnemyAttackPattern(newPhase);
     
-    let baseInterval = gameState.OPPONENT_SHOOT_INTERVAL;
+    let baseInterval = gameState.OPPONENT_ATTACK_INTERVAL;
     const phaseMultipliers = {
         'normal': 1.0,
         'aggressive': 0.7,
@@ -192,296 +201,650 @@ export function opponentShoot() {
     };
     const currentInterval = patternIntervals[pattern] || baseInterval;
     
-    if (now - gameState.opponentLastShotTime < currentInterval) return;
+    if (now - gameState.opponentLastAttackTime < currentInterval) return;
     
     if (pattern === 'burst') {
-        if (gameState.enemyPatternShotCount >= 3) {
-            gameState.enemyPatternShotCount = 0;
-            gameState.opponentLastShotTime = now;
-            gameState.enemyNextPatternTime = now + 1000;
+        if (gameState.enemyPatternAttackCount >= 3) {
+            setEnemyPatternAttackCount(0);
+            setOpponentLastAttackTime(now);
+            setEnemyNextPatternTime(now + 1000);
             return;
         }
-        gameState.enemyPatternShotCount++;
+        setEnemyPatternAttackCount(gameState.enemyPatternAttackCount + 1);
     } else if (pattern === 'rapid') {
-        if (gameState.enemyPatternShotCount >= 5) {
-            gameState.enemyPatternShotCount = 0;
-            gameState.opponentLastShotTime = now;
-            gameState.enemyNextPatternTime = now + 800;
+        if (gameState.enemyPatternAttackCount >= 5) {
+            setEnemyPatternAttackCount(0);
+            setOpponentLastAttackTime(now);
+            setEnemyNextPatternTime(now + 800);
             return;
         }
-        gameState.enemyPatternShotCount++;
+        setEnemyPatternAttackCount(gameState.enemyPatternAttackCount + 1);
     } else {
-        gameState.enemyPatternShotCount = 0;
+        setEnemyPatternAttackCount(0);
     }
     
-    gameState.opponentLastShotTime = now;
+    // Randomly select opponent attack direction (For Honor: only UP, LEFT, RIGHT for guard)
+    const guardDirections = ['up', 'left', 'right'];
+    const attackDirection = guardDirections[Math.floor(Math.random() * guardDirections.length)];
+    setOpponentCurrentDirection(attackDirection);
     
-    const muzzleWorldPos = new THREE.Vector3();
-    muzzleWorldPos.copy(opponentGroup.position);
-    muzzleWorldPos.y += 1.5;
+    // Update opponent guard indicator to show guard direction (always visible when opponent has guard)
+    updateOpponentAttackIndicator(attackDirection, false); // Show guard (cyan) before attack
     
-    const playerPos = camera.position.clone();
-    const direction = new THREE.Vector3()
-        .subVectors(playerPos, muzzleWorldPos)
-        .normalize();
+    // Also set opponent guard direction for blocking checks
+    setOpponentGuardDirection(attackDirection);
     
-    const spread = 0.15;
-    direction.x += (Math.random() - 0.5) * spread;
-    direction.y += (Math.random() - 0.5) * spread;
-    direction.normalize();
+    // Randomly select light or heavy attack
+    const attackType = Math.random() > 0.5 ? ATTACK_TYPES.HEAVY : ATTACK_TYPES.LIGHT;
     
-    const raycaster = new THREE.Raycaster();
-    raycaster.set(muzzleWorldPos, direction);
+    console.log('=== OPPONENT STARTING ATTACK ===');
+    console.log('Direction:', attackDirection, 'Type:', attackType);
+    console.log('Windup time:', OPPONENT_ATTACK_WINDUP_TIME, 'ms');
     
-    const hitDistance = raycaster.ray.distanceToPoint(camera.position);
+    // Set windup phase - show incoming attack direction (arrow turns red)
+    const windupEndTime = now + OPPONENT_ATTACK_WINDUP_TIME;
+    setOpponentIncomingAttackDirection(attackDirection);
+    setOpponentAttackWindupTime(windupEndTime);
     
-    if (hitDistance < 30) {
-        const now = Date.now();
-        if (now < gameState.dodgeInvincibilityEnd) {
+    // Set parry window (last 200ms before attack lands)
+    const parryWindowStart = windupEndTime - PARRY_WINDOW;
+    const parryWindowEnd = windupEndTime;
+    setParryWindow(parryWindowStart, parryWindowEnd);
+    
+    // Store opponent attack type
+    setOpponentAttackType(attackType);
+    
+    updateOpponentAttackIndicator(attackDirection, true);
+    
+    // Show block timing slider when opponent attacks
+    showBlockTimingSlider(BLOCK_TIMING_SLIDER_DURATION, (blocked, timing) => {
+        // Callback is called when slider times out or is triggered
+        // The actual blocking is handled in the blockCheckInterval
+    });
+    
+    // Track if attack was blocked during windup
+    let attackBlocked = false;
+    let attackCancelled = false;
+    let attackTimeoutId = null; // Store timeout reference for cleanup
+    
+    // Schedule the actual attack after windup (if not blocked) - set this up first
+    attackTimeoutId = setTimeout(() => {
+        // Make sure interval is cleared
+        clearInterval(blockCheckInterval);
+        
+        // Double-check if attack was blocked or cancelled
+        if (attackCancelled || attackBlocked) {
+            console.log('Attack already cancelled/blocked, not landing');
+            setOpponentIncomingAttackDirection(null);
+            updateOpponentAttackIndicator(null, false);
+            hideBlockTimingSlider();
             return;
         }
         
-        const damage = gameState.currentOpponentData ? gameState.currentOpponentData.damage : 15;
-        gameState.playerHealth -= damage;
-        updateHealthBar();
-        
-        const hitGeometry = new THREE.SphereGeometry(0.5, 8, 8);
-        const hitMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0xff0000, 
-            transparent: true, 
-            opacity: 0.8,
-            emissive: 0xff4400,
-            emissiveIntensity: 0.6
-        });
-        const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
-        hitEffect.position.copy(camera.position);
-        scene.add(hitEffect);
-        
-        new TWEEN.Tween(hitEffect.scale)
-            .to({ x: 0, y: 0, z: 0 }, 300)
-            .onComplete(() => {
-                scene.remove(hitEffect);
-                hitEffect.geometry.dispose();
-                hitEffect.material.dispose();
-            })
-            .start();
-        
-        new TWEEN.Tween(hitEffect.material)
-            .to({ opacity: 0 }, 300)
-            .start();
-        
-        const hud = document.getElementById('hud');
-        hud.style.color = "#ff0000";
-        updateHUD(`TAKEN DAMAGE! HEALTH: ${gameState.playerHealth}%`, "#ff0000");
-        setTimeout(() => {
-            updateHUD("STATUS: AIMING (Ready)", "");
-        }, 500);
-        
-        if (gameState.playerHealth <= 0) {
-            gameState.lastImportantMessageTime = Date.now();
-            updateHUD("DEFEAT! MISSION FAILED", "#ff0000");
-            endGame(false);
+        // Additional safety check - if direction is cleared, attack was blocked
+        if (!gameState.opponentIncomingAttackDirection || gameState.opponentIncomingAttackDirection !== attackDirection) {
+            console.log('Attack direction cleared, assuming blocked');
+            hideBlockTimingSlider();
+            return;
         }
-    }
+        
+        console.log('=== ATTACK TIMEOUT FIRED ===');
+        console.log('Game started:', gameState.gameStarted);
+        console.log('Opponent health:', gameState.opponentHealth);
+        console.log('Player health:', gameState.playerHealth);
+        
+        if (!gameState.gameStarted || gameState.opponentHealth <= 0 || gameState.playerHealth <= 0) {
+            console.log('Attack cancelled - game not active');
+            setOpponentIncomingAttackDirection(null);
+            updateOpponentAttackIndicator(null, false);
+            return;
+        }
+        
+        const attackTime = Date.now();
+        setOpponentLastAttackTime(attackTime);
+        
+        // Check if attack hits player
+        const opponentPos = opponentGroup.position.clone();
+        opponentPos.y += 1.5;
+        const playerPos = camera.position.clone();
+        const distance = opponentPos.distanceTo(playerPos);
+        
+        console.log('Attack distance check:', distance.toFixed(2), '(needs to be < 14)');
+        console.log('Opponent pos:', opponentPos);
+        console.log('Player pos:', playerPos);
+        
+        if (distance < 14) { // Melee range (increased to account for opponent being further back)
+            console.log('✓ In melee range');
+            
+            if (attackTime < gameState.dodgeInvincibilityEnd) {
+                console.log('Player dodging, attack cancelled');
+                setOpponentIncomingAttackDirection(null);
+                updateOpponentAttackIndicator(null, false);
+                return; // Player is dodging
+            }
+            
+            // Final check if player blocked (shouldn't happen if checking during windup, but safety check)
+            const playerGuard = gameState.guardDirection || gameState.currentDirection || combatController.currentDirection;
+            const playerBlocked = playerGuard === attackDirection;
+            
+            // Check for parry
+            const inParryWindow = attackTime >= gameState.parryWindowStart && attackTime <= gameState.parryWindowEnd;
+            const isParry = playerBlocked && inParryWindow;
+            
+            // Heavy attacks are unblockable (must parry or dodge)
+            const isUnblockable = attackType === ATTACK_TYPES.HEAVY;
+            
+            console.log('=== OPPONENT ATTACK LANDING ===');
+            console.log('Attack direction:', attackDirection);
+            console.log('Attack type:', attackType);
+            console.log('Player gameState direction:', gameState.currentDirection);
+            console.log('Player controller direction:', combatController.currentDirection);
+            console.log('Player guard used for block check:', playerGuard);
+            console.log('Blocked?', playerBlocked);
+            console.log('Distance:', distance);
+            
+            // Check timing slider if blocking (fallback check at attack landing)
+            let timingResult = null;
+            if (playerBlocked) {
+                timingResult = triggerBlockTiming();
+            }
+            
+            if (timingResult === 'perfect') {
+                // Perfect parry!
+                console.log('✓ PERFECT PARRY - Perfect timing! Counter-attack opportunity!');
+                const currentStamina = gameState.playerStamina || 100;
+                setPlayerStamina(Math.min(100, currentStamina + 15));
+                updateStaminaBar();
+                updateHUD("PERFECT BLOCK! COUNTER-ATTACK!", "#00ff00");
+                showBlockNotification('opponent');
+                hideBlockTimingSlider();
+            } else if (timingResult === 'good' && !isUnblockable) {
+                // Good block
+                console.log('✓ GOOD BLOCK - Blocked with good timing!');
+                updateHUD("BLOCKED!", "#00ffff");
+                showBlockNotification('opponent');
+                hideBlockTimingSlider();
+            } else if (playerBlocked && !isUnblockable && timingResult === null) {
+                // Blocked but timing slider wasn't active (fallback)
+                console.log('✓ BLOCKED - No damage taken!');
+                updateHUD("BLOCKED!", "#00ffff");
+                showBlockNotification('opponent');
+                hideBlockTimingSlider();
+            } else if (playerBlocked && !isUnblockable) {
+                // Attack blocked at the last moment!
+                console.log('✓ BLOCKED - No damage taken!');
+                const blockGeometry = new THREE.SphereGeometry(0.6, 8, 8);
+                const blockMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x00ffff, 
+                    transparent: true, 
+                    opacity: 0.9,
+                    emissive: 0x00ffff,
+                    emissiveIntensity: 0.8
+                });
+                const blockEffect = new THREE.Mesh(blockGeometry, blockMaterial);
+                blockEffect.position.copy(playerPos);
+                scene.add(blockEffect);
+                
+                new TWEEN.Tween(blockEffect.scale)
+                    .to({ x: 0, y: 0, z: 0 }, 400)
+                    .onComplete(() => {
+                        scene.remove(blockEffect);
+                        blockEffect.geometry.dispose();
+                        blockEffect.material.dispose();
+                    })
+                    .start();
+                
+            if (isParry) {
+                updateHUD("PARRY! COUNTER-ATTACK!", "#00ff00");
+                // Parry gives stamina boost and counter-attack opportunity
+                const currentStamina = gameState.playerStamina || 100;
+                setPlayerStamina(Math.min(100, currentStamina + 10));
+            } else {
+                updateHUD("BLOCKED!", "#00ffff");
+            }
+            
+            // Show block notification popup
+            showBlockNotification('opponent');
+            } else {
+                // Attack hits! Player didn't block in time
+                console.log('✗ NOT BLOCKED - Taking damage!');
+                const baseDamage = gameState.currentOpponentData ? gameState.currentOpponentData.damage : 15;
+                let damage;
+                if (attackType === ATTACK_TYPES.HEAVY) {
+                    damage = baseDamage * 1.5; // Heavy attacks do more damage
+                } else {
+                    damage = baseDamage;
+                }
+                const oldHealth = gameState.playerHealth;
+                const newPlayerHealth = Math.max(0, oldHealth - damage);
+                
+                console.log(`Damage: ${damage} (${attackType === ATTACK_TYPES.HEAVY ? 'HEAVY' : 'LIGHT'})`);
+                console.log(`Health: ${oldHealth} → ${newPlayerHealth}`);
+                
+                setPlayerHealth(newPlayerHealth);
+                updateHealthBar();
+                
+                // Visual effect at player position
+                const hitGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+                const hitMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0xff0000, 
+                    transparent: true, 
+                    opacity: 0.8,
+                    emissive: 0xff4400,
+                    emissiveIntensity: 0.6
+                });
+                const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
+                hitEffect.position.copy(playerPos);
+                scene.add(hitEffect);
+                
+                new TWEEN.Tween(hitEffect.scale)
+                    .to({ x: 0, y: 0, z: 0 }, 300)
+                    .onComplete(() => {
+                        scene.remove(hitEffect);
+                        hitEffect.geometry.dispose();
+                        hitEffect.material.dispose();
+                    })
+                    .start();
+                
+                updateHUD("HIT!", "#ff0000");
+                
+                // Screen shake effect
+                const hud = document.getElementById('hud');
+                if (hud) {
+                    hud.style.animation = 'none';
+                    setTimeout(() => {
+                        hud.style.animation = 'damageShake 0.3s';
+                        setTimeout(() => {
+                            hud.style.animation = '';
+                        }, 300);
+                    }, 10);
+                }
+                
+                if (newPlayerHealth <= 0) {
+                    setLastImportantMessageTime(Date.now());
+                    updateHUD("DEFEAT! MISSION FAILED", "#ff0000");
+                    endGame(false);
+                }
+            }
+            
+            // Clear attack indicator but keep guard direction visible
+            setOpponentIncomingAttackDirection(null);
+            // Keep guard indicator visible with current guard direction
+            if (gameState.opponentGuardDirection) {
+                updateOpponentAttackIndicator(gameState.opponentGuardDirection, false);
+            } else {
+                updateOpponentAttackIndicator(null, false);
+            }
+            hideBlockTimingSlider(); // Hide slider if still showing
+            
+            // Reset attack timer after attack lands
+            setOpponentLastAttackTime(Date.now());
+            
+            // Visual effect at opponent position when attack lands
+            const attackPos = opponentGroup.position.clone();
+            attackPos.y += 1.5;
+            
+            const flashGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+            const flashMaterial = new THREE.MeshBasicMaterial({ 
+                color: attackType === ATTACK_TYPES.HEAVY ? 0xff0000 : 0xff8800, 
+                transparent: true, 
+                opacity: 0.9 
+            });
+            const flash = new THREE.Mesh(flashGeometry, flashMaterial);
+            flash.position.copy(attackPos);
+            scene.add(flash);
+            
+            setTimeout(() => {
+                scene.remove(flash);
+                flash.geometry.dispose();
+                flash.material.dispose();
+            }, 200);
+        } else {
+            console.log('✗ Out of range');
+            // Still reset timer even if out of range
+            setOpponentLastAttackTime(Date.now());
+        }
+    }, OPPONENT_ATTACK_WINDUP_TIME);
     
-    if (opponentMuzzleLight) {
-        opponentMuzzleLight.intensity = 3;
-        opponentMuzzleLight.color.setHex(0xff0000);
+    // Continuously check for blocking during windup phase (when arrow is red)
+    const blockCheckInterval = setInterval(() => {
+        if (!gameState.gameStarted || gameState.opponentHealth <= 0 || gameState.playerHealth <= 0) {
+            attackCancelled = true;
+            clearInterval(blockCheckInterval);
+            setOpponentIncomingAttackDirection(null);
+            updateOpponentAttackIndicator(null, false);
+            hideBlockTimingSlider();
+            return;
+        }
         
-        const flashGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-        const flashMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0xff0000, 
-            transparent: true, 
-            opacity: 0.9 
-        });
-        const flash = new THREE.Mesh(flashGeometry, flashMaterial);
-        flash.position.copy(muzzleWorldPos);
-        scene.add(flash);
+        // Check if windup time has passed (shouldn't happen, but safety check)
+        if (Date.now() >= windupEndTime) {
+            clearInterval(blockCheckInterval);
+            hideBlockTimingSlider();
+            return;
+        }
         
-        setTimeout(() => {
-            opponentMuzzleLight.intensity = 0;
-            scene.remove(flash);
-            flash.geometry.dispose();
-            flash.material.dispose();
-        }, 100);
-    }
+        // For Honor style blocking: Check if player's guard matches attack direction
+        const playerGuard = gameState.guardDirection || gameState.currentDirection || combatController.currentDirection;
+        const isBlocking = playerGuard === attackDirection;
+        
+        // Check timing slider if blocking
+        if (isBlocking && !attackBlocked) {
+            const timingResult = triggerBlockTiming();
+            
+            if (timingResult && (timingResult === 'perfect' || timingResult === 'good')) {
+                // Block successful with good timing!
+                attackBlocked = true;
+                attackCancelled = true;
+                clearInterval(blockCheckInterval);
+                if (attackTimeoutId !== null) {
+                    clearTimeout(attackTimeoutId);
+                    attackTimeoutId = null;
+                }
+                
+                const isParry = timingResult === 'perfect';
+                
+                if (isParry) {
+                    console.log('=== PERFECT PARRY! ===');
+                    console.log('Attack direction:', attackDirection);
+                    console.log('Player guard:', playerGuard);
+                    console.log('✓ PERFECT TIMING - Perfect block! Counter-attack opportunity!');
+                } else {
+                    console.log('=== GOOD BLOCK ===');
+                    console.log('Attack direction:', attackDirection);
+                    console.log('Player guard:', playerGuard);
+                    console.log('✓ BLOCKED - Good timing!');
+                }
+                
+                // Show block effect
+                const playerPos = camera.position.clone();
+                const blockGeometry = new THREE.SphereGeometry(0.6, 8, 8);
+                const blockMaterial = new THREE.MeshStandardMaterial({ 
+                    color: isParry ? 0x00ff00 : 0x00ffff, 
+                    transparent: true, 
+                    opacity: 0.9,
+                    emissive: isParry ? 0x00ff00 : 0x00ffff,
+                    emissiveIntensity: 0.8
+                });
+                const blockEffect = new THREE.Mesh(blockGeometry, blockMaterial);
+                blockEffect.position.copy(playerPos);
+                scene.add(blockEffect);
+                
+                new TWEEN.Tween(blockEffect.scale)
+                    .to({ x: 0, y: 0, z: 0 }, 400)
+                    .onComplete(() => {
+                        scene.remove(blockEffect);
+                        blockEffect.geometry.dispose();
+                        blockEffect.material.dispose();
+                    })
+                    .start();
+                
+                if (isParry) {
+                    updateHUD("PERFECT BLOCK! COUNTER-ATTACK!", "#00ff00");
+                    const currentStamina = gameState.playerStamina || 100;
+                    setPlayerStamina(Math.min(100, currentStamina + 15));
+                    updateStaminaBar();
+                } else {
+                    updateHUD("BLOCKED!", "#00ffff");
+                }
+                
+                // Show block notification popup
+                showBlockNotification('opponent');
+                
+                // Clear the attack indicator but keep guard visible
+                setOpponentIncomingAttackDirection(null);
+                // Keep guard indicator visible with current guard direction
+                if (gameState.opponentGuardDirection) {
+                    updateOpponentAttackIndicator(gameState.opponentGuardDirection, false);
+                } else {
+                    updateOpponentAttackIndicator(null, false);
+                }
+                hideBlockTimingSlider();
+                
+                // Reset attack timer to prevent immediate next attack
+                const blockedTime = Date.now();
+                setOpponentLastAttackTime(blockedTime);
+                console.log('Attack timer reset after block. Next attack can happen after:', blockedTime + gameState.OPPONENT_ATTACK_INTERVAL);
+                
+                // Make sure the setTimeout doesn't fire
+                return;
+            }
+            // If timing was wrong (miss), continue - player will take damage
+        }
+    }, 50); // Check every 50ms for responsive blocking
 }
 
-// Player shooting (called from GunController)
-export function handlePlayerFire(gunController) {
+// Player melee attack (called from MeleeCombatController)
+export function handlePlayerAttack(direction, attackType) {
     if (!gameState.gameStarted || (gameState.isPvPMode ? gameState.playerHealth <= 0 : gameState.opponentHealth <= 0)) return;
     
-    if (gameState.isReloading) {
-        updateHUD("RELOADING...", "");
+    // For Honor style: Can attack from guard direction or change direction mid-attack
+    // If no direction specified, use current guard direction
+    const attackDirection = direction || gameState.guardDirection || gameState.currentDirection;
+    
+    if (attackDirection === null) {
+        updateHUD("SET GUARD STANCE FIRST", "#ffaa00");
         return;
     }
     
-    if (gameState.playerAmmo <= 0) {
-        updateHUD("OUT OF AMMO!", "");
-        return;
-    }
-    
+    // Check stamina
     const selectedWeapon = weapons.find(w => w.id === gameState.userStats.selectedWeapon) || weapons[0];
-    const now = Date.now();
-    if (now - gameState.lastFireTime < selectedWeapon.fireRate) return;
-    gameState.lastFireTime = now;
+    const staminaCost = selectedWeapon.staminaCost[attackType] || 10;
     
-    gameState.playerAmmo--;
-    updateAmmoCount();
+    if (gameState.playerStamina < staminaCost) {
+        updateHUD("NOT ENOUGH STAMINA!", "#ff0000");
+        return;
+    }
+    
+    // Consume stamina
+    setPlayerStamina(gameState.playerStamina - staminaCost);
+    updateStaminaBar();
+    
+    if (gameState.isAttacking || gameState.attackCooldown) {
+        return;
+    }
+    
+    const now = Date.now();
+    
+    // Use For Honor style attack speeds
+    let attackSpeed;
+    if (attackType === ATTACK_TYPES.GUARD_BREAK) {
+        attackSpeed = selectedWeapon.guardBreakSpeed || 800;
+    } else if (attackType === ATTACK_TYPES.HEAVY) {
+        attackSpeed = selectedWeapon.heavyAttackSpeed || 1000;
+    } else {
+        attackSpeed = selectedWeapon.lightAttackSpeed || 500;
+    }
+    
+    if (now - gameState.lastAttackTime < attackSpeed) return;
+    
+    setLastAttackTime(now);
+    setIsAttacking(true);
+    setAttackCooldown(true);
+    
+    // Reset cooldown after attack animation
+    setTimeout(() => {
+        setIsAttacking(false);
+        setAttackCooldown(false);
+    }, attackSpeed);
     
     if (gameState.isPvPMode && window.sendPlayerAction) {
-        window.sendPlayerAction({ type: 'shoot', timestamp: Date.now() });
+        window.sendPlayerAction({ type: 'attack', direction, attackType, timestamp: Date.now() });
     }
     
-    updateHUD("STATUS: 🔥 FIRE! 🔥", "");
+    const attackTypeName = attackType === ATTACK_TYPES.HEAVY ? 'HEAVY' : 'LIGHT';
+    const directionName = direction.toUpperCase();
+    updateHUD(`${attackTypeName} ATTACK ${directionName}!`, "#00ffff");
     const hud = document.getElementById('hud');
     hud.classList.add('firing');
     
-    const originalZ = gunGroup.position.z;
-    const originalRotX = gunGroup.rotation.x;
-    gunGroup.position.z += 0.15;
-    gunGroup.rotation.x += 0.15;
-    gunGroup.position.y -= 0.05;
-    
-    muzzleLight.intensity = 4;
-    muzzleLight.color.setHex(0x00ffff);
-    
-    const flashGeometry = new THREE.SphereGeometry(0.15, 8, 8);
-    const flashMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0x00ffff, 
-        transparent: true, 
-        opacity: 0.9 
-    });
-    const flash = new THREE.Mesh(flashGeometry, flashMaterial);
-    flash.position.copy(muzzleLight.position);
-    gunGroup.add(flash);
-    
-    setTimeout(() => {
-        gunGroup.position.z = originalZ;
-        gunGroup.rotation.x = originalRotX;
-        gunGroup.position.y += 0.05;
-        muzzleLight.intensity = 0;
-        gunGroup.remove(flash);
-        flash.geometry.dispose();
-        flash.material.dispose();
-        hud.classList.remove('firing');
-    }, 150);
-    
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(gameState.reticleX, gameState.reticleY), camera);
-    
-    const opponentMeshes = [];
-    if (opponentModel) {
-        opponentModel.traverse((child) => {
-            if (child.isMesh && child !== opponentGroup.userData.healthBarFill && child !== opponentGroup.userData.healthBarBg) {
-                opponentMeshes.push(child);
-            }
-        });
+    // Weapon swing animation
+    if (gunGroup) {
+        const originalZ = gunGroup.position.z;
+        const originalRotX = gunGroup.rotation.x;
+        const swingAmount = attackType === ATTACK_TYPES.HEAVY ? 0.3 : 0.15;
+        gunGroup.position.z += swingAmount;
+        gunGroup.rotation.x += swingAmount;
+        
+        setTimeout(() => {
+            gunGroup.position.z = originalZ;
+            gunGroup.rotation.x = originalRotX;
+            hud.classList.remove('firing');
+        }, attackSpeed * 0.5);
     }
     
-    const intersects = raycaster.intersectObjects(opponentMeshes, false);
+    // Check if attack hits opponent
+    const playerPos = camera.position.clone();
+    const opponentPos = opponentGroup.position.clone();
+    opponentPos.y += 1.5;
+    const distance = playerPos.distanceTo(opponentPos);
     
-    if (intersects.length > 0) {
-        const hitPoint = intersects[0].point;
-        
-        const hitGeometry = new THREE.SphereGeometry(0.3, 8, 8);
-        const hitMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0x00ffff, 
-            transparent: true, 
-            opacity: 0.9,
-            emissive: 0x00aaff,
-            emissiveIntensity: 0.5
-        });
-        const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
-        hitEffect.position.copy(hitPoint);
-        scene.add(hitEffect);
-        
-        new TWEEN.Tween(hitEffect.scale)
-            .to({ x: 0, y: 0, z: 0 }, 200)
-            .onComplete(() => {
-                scene.remove(hitEffect);
-                hitEffect.geometry.dispose();
-                hitEffect.material.dispose();
-            })
-            .start();
-        
-        new TWEEN.Tween(hitEffect.material)
-            .to({ opacity: 0 }, 200)
-            .start();
-        
-        const damage = selectedWeapon.damage;
-        gameState.opponentHealth -= damage;
-        
-        if (gameState.isPvPMode && window.sendPlayerHit) {
-            window.sendPlayerHit(damage);
-        }
-        
-        updateOpponentHealthBar();
-        
-        const hitObj = intersects[0].object;
-        if (hitObj.material && hitObj.material.color) {
-            const originalColor = hitObj.material.color.getHex();
-            hitObj.material.color.setHex(0xff0000);
-            setTimeout(() => hitObj.material.color.setHex(originalColor), 150);
-        }
-        
-        if (gameState.opponentHealth <= 0) {
-            gameState.lastImportantMessageTime = Date.now();
-            const reward = gameState.currentOpponentData ? gameState.currentOpponentData.reward : 0;
-            updateHUD(`VICTORY! TARGET NEUTRALIZED\n+${reward} CREDITS`, "#00ffff");
+    console.log('=== PLAYER ATTACK ===');
+    console.log('Distance:', distance.toFixed(2), '(needs to be < 14)');
+    console.log('Attack direction:', direction);
+    console.log('Opponent guard direction:', gameState.opponentCurrentDirection);
+    
+    // For Honor style: Check if opponent's guard matches attack direction
+    const opponentGuard = gameState.opponentGuardDirection || gameState.opponentCurrentDirection;
+    const isBlocked = opponentGuard === direction;
+    
+    // Heavy attacks are unblockable (must parry or dodge)
+    const isUnblockable = attackType === ATTACK_TYPES.HEAVY;
+    
+    if (distance < 14) { // Melee range (increased to match opponent being further back)
+        if (isBlocked && !isUnblockable) {
+            // Attack blocked!
+            const blockGeometry = new THREE.SphereGeometry(0.4, 8, 8);
+            const blockMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xffff00, 
+                transparent: true, 
+                opacity: 0.9,
+                emissive: 0xffff00,
+                emissiveIntensity: 0.8
+            });
+            const blockEffect = new THREE.Mesh(blockGeometry, blockMaterial);
+            blockEffect.position.copy(opponentPos);
+            scene.add(blockEffect);
             
-            new TWEEN.Tween(opponentGroup.rotation)
-                .to({ x: -Math.PI / 2 }, 500)
-                .easing(TWEEN.Easing.Bounce.Out)
+            new TWEEN.Tween(blockEffect.scale)
+                .to({ x: 0, y: 0, z: 0 }, 300)
+                .onComplete(() => {
+                    scene.remove(blockEffect);
+                    blockEffect.geometry.dispose();
+                    blockEffect.material.dispose();
+                })
                 .start();
             
-            endGame(true);
-        } else {
-            gameState.lastImportantMessageTime = Date.now();
-            updateHUD(`HIT! ENEMY HEALTH: ${gameState.opponentHealth}%`, "");
+            setLastImportantMessageTime(Date.now());
+            updateHUD("BLOCKED!", "#ffff00");
+            
+            // Show block notification popup
+            showBlockNotification('player');
+            
             setTimeout(() => {
-                if (Date.now() - gameState.lastImportantMessageTime >= 2000) {
-                    if (gunController.isHolstered) {
-                        updateHUD("STATUS: READY", "");
-                    } else {
-                        updateHUD("STATUS: AIMING (Ready)", "");
-                    }
+                if (Date.now() - gameState.lastImportantMessageTime >= 1000) {
+                    updateHUD("STATUS: READY", "");
                 }
-            }, 2000);
+            }, 1000);
+        } else {
+            // Attack hits!
+            const hitPoint = opponentPos.clone();
+            
+            const hitGeometry = new THREE.SphereGeometry(0.4, 8, 8);
+            const hitMaterial = new THREE.MeshStandardMaterial({ 
+                color: attackType === ATTACK_TYPES.HEAVY ? 0xff0000 : 0x00ffff, 
+                transparent: true, 
+                opacity: 0.9,
+                emissive: attackType === ATTACK_TYPES.HEAVY ? 0xff4400 : 0x00aaff,
+                emissiveIntensity: 0.6
+            });
+            const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
+            hitEffect.position.copy(hitPoint);
+            scene.add(hitEffect);
+            
+            new TWEEN.Tween(hitEffect.scale)
+                .to({ x: 0, y: 0, z: 0 }, 300)
+                .onComplete(() => {
+                    scene.remove(hitEffect);
+                    hitEffect.geometry.dispose();
+                    hitEffect.material.dispose();
+                })
+                .start();
+            
+            new TWEEN.Tween(hitEffect.material)
+                .to({ opacity: 0 }, 300)
+                .start();
+            
+            let damage;
+            if (attackType === ATTACK_TYPES.GUARD_BREAK) {
+                damage = selectedWeapon.guardBreakDamage || 5;
+            } else if (attackType === ATTACK_TYPES.HEAVY) {
+                damage = selectedWeapon.heavyDamage;
+            } else {
+                damage = selectedWeapon.lightDamage;
+            }
+            const oldHealth = gameState.opponentHealth;
+            const newOpponentHealth = Math.max(0, oldHealth - damage);
+            
+            console.log(`Player dealt ${damage} damage (${attackType === ATTACK_TYPES.HEAVY ? 'HEAVY' : 'LIGHT'})`);
+            console.log(`Opponent health: ${oldHealth} → ${newOpponentHealth}`);
+            
+            setOpponentHealth(newOpponentHealth);
+            
+            if (gameState.isPvPMode && window.sendPlayerHit) {
+                window.sendPlayerHit(damage);
+            }
+            
+            updateOpponentHealthBar();
+            
+            const attackTypeName = attackType === ATTACK_TYPES.HEAVY ? 'HEAVY' : 'LIGHT';
+            updateHUD(`${attackTypeName} HIT! -${damage} OPPONENT HEALTH: ${newOpponentHealth}%`, "#00ff00");
+            
+            if (newOpponentHealth <= 0) {
+                setLastImportantMessageTime(Date.now());
+                const reward = gameState.currentOpponentData ? gameState.currentOpponentData.reward : 0;
+                updateHUD(`VICTORY! OPPONENT DEFEATED\n+${reward} CREDITS`, "#00ffff");
+                
+                new TWEEN.Tween(opponentGroup.rotation)
+                    .to({ x: -Math.PI / 2 }, 500)
+                    .easing(TWEEN.Easing.Bounce.Out)
+                    .start();
+                
+                endGame(true);
+            } else {
+                setLastImportantMessageTime(Date.now());
+                updateHUD(`${attackTypeName} HIT! ENEMY HEALTH: ${newOpponentHealth}%`, "");
+                setTimeout(() => {
+                    if (Date.now() - gameState.lastImportantMessageTime >= 2000) {
+                        updateHUD("STATUS: READY", "");
+                    }
+                }, 2000);
+            }
         }
     } else {
-        gameState.lastImportantMessageTime = Date.now();
-        updateHUD("MISS!", "");
+        // Out of range
+        setLastImportantMessageTime(Date.now());
+        updateHUD("OUT OF RANGE!", "#ffaa00");
         setTimeout(() => {
-            if (Date.now() - gameState.lastImportantMessageTime >= 500) {
-                if (gunController.isHolstered) {
-                    updateHUD("STATUS: READY", "");
-                } else {
-                    updateHUD("STATUS: AIMING (Ready)", "");
-                }
+            if (Date.now() - gameState.lastImportantMessageTime >= 1000) {
+                updateHUD("STATUS: READY", "");
             }
-        }, 500);
+        }, 1000);
     }
 }
 
 // Game end
 export function endGame(victory) {
-    gameState.gameStarted = false;
-    gameState.orientationEnabled = false;
+    setGameStarted(false);
+    setOrientationEnabled(false);
     
     opponentGroup.visible = false;
     gunGroup.visible = false;
-    document.getElementById('crosshair').classList.remove('visible');
     document.getElementById('health-bar-container').classList.remove('visible');
-    document.getElementById('ammo-count').classList.remove('visible');
-    document.getElementById('reload-button').classList.remove('visible');
-    document.getElementById('reload-skill-bar').classList.remove('active');
-    
-    if (gameState.reloadSkillBarAnimationFrame) {
-        cancelAnimationFrame(gameState.reloadSkillBarAnimationFrame);
-        gameState.reloadSkillBarAnimationFrame = null;
-    }
-    gameState.isReloading = false;
+    document.getElementById('stamina-bar-container').classList.remove('visible');
+    document.getElementById('direction-indicator').classList.remove('visible');
+    document.getElementById('light-attack-button').classList.remove('visible');
+    document.getElementById('heavy-attack-button').classList.remove('visible');
     
     if (victory) {
         if (gameState.isPvPMode && gameState.currentPvPOpponentStats) {

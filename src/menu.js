@@ -1,7 +1,11 @@
 // Menu System
 
 import * as gameState from './gameState.js';
+import { setIsPvPMode, setGameMode } from './gameState.js';
 import { opponents, weapons } from './config.js';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { saveUserStats } from './auth.js';
 
 // Update user profile display
 export function updateUserProfile() {
@@ -83,8 +87,8 @@ export function initializeMenu() {
                 const opponentId = button.dataset.opponentId;
                 const opponent = opponents.find(o => o.id === opponentId);
                 if (opponent && window.startGame) {
-                    gameState.gameMode = 'singleplayer';
-                    gameState.isPvPMode = false;
+                    setGameMode('singleplayer');
+                    setIsPvPMode(false);
                     document.getElementById('main-menu').classList.add('hidden');
                     await window.startGame(opponent);
                 }
@@ -127,16 +131,20 @@ export function initializeCustomization() {
             ${!isUnlocked ? '<div style="color: #ffaa00; font-size: 0.7rem; margin-bottom: 8px;">LOCKED</div>' : ''}
             <div class="weapon-stats">
                 <div class="weapon-stat">
-                    <span>Damage:</span>
-                    <span class="weapon-stat-value">${weapon.damage}</span>
+                    <span>Light Damage:</span>
+                    <span class="weapon-stat-value">${weapon.lightDamage}</span>
                 </div>
                 <div class="weapon-stat">
-                    <span>Ammo:</span>
-                    <span class="weapon-stat-value">${weapon.ammo}</span>
+                    <span>Heavy Damage:</span>
+                    <span class="weapon-stat-value">${weapon.heavyDamage}</span>
                 </div>
                 <div class="weapon-stat">
-                    <span>Fire Rate:</span>
-                    <span class="weapon-stat-value">${weapon.fireRate}ms</span>
+                    <span>Light Speed:</span>
+                    <span class="weapon-stat-value">${weapon.lightAttackSpeed}ms</span>
+                </div>
+                <div class="weapon-stat">
+                    <span>Heavy Speed:</span>
+                    <span class="weapon-stat-value">${weapon.heavyAttackSpeed}ms</span>
                 </div>
             </div>
         `;
@@ -163,7 +171,7 @@ function updateCustomizationStatus() {
     document.getElementById('status-rank').textContent = gameState.userStats.rank;
     
     const selectedWeapon = weapons.find(w => w.id === gameState.userStats.selectedWeapon);
-    document.getElementById('status-weapon').textContent = selectedWeapon ? selectedWeapon.name : 'Pistol';
+    document.getElementById('status-weapon').textContent = selectedWeapon ? selectedWeapon.name : 'Sword';
     document.getElementById('status-character').textContent = 'Customized';
 }
 
@@ -178,20 +186,277 @@ export function hideCustomization() {
     document.getElementById('main-menu').classList.remove('hidden');
 }
 
-// Character customization (simplified - full implementation in original main.js)
+// Character customization
+let characterPreviewScene = null;
+let characterPreviewCamera = null;
+let characterPreviewRenderer = null;
+let characterPreviewModel = null;
+let characterPreviewLight = null;
+let characterPreviewAnimationFrame = null;
+let characterPreviewResizeHandler = null;
+
 export function initializeCharacterCustomization() {
-    // Character customization code would go here
-    // This is a placeholder - full implementation is in original main.js
-    console.log('Character customization initialized');
+    const previewContainer = document.getElementById('character-preview-container');
+    if (!previewContainer) return;
+    
+    // Clear any existing content
+    previewContainer.innerHTML = '';
+    
+    // Create Three.js scene for character preview
+    characterPreviewScene = new THREE.Scene();
+    characterPreviewScene.background = new THREE.Color(0x1a1a2e);
+    
+    // Camera
+    characterPreviewCamera = new THREE.PerspectiveCamera(
+        50,
+        previewContainer.clientWidth / previewContainer.clientHeight,
+        0.1,
+        1000
+    );
+    characterPreviewCamera.position.set(0, 1.5, 3);
+    characterPreviewCamera.lookAt(0, 1, 0);
+    
+    // Renderer
+    characterPreviewRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    characterPreviewRenderer.setSize(previewContainer.clientWidth, previewContainer.clientHeight);
+    characterPreviewRenderer.shadowMap.enabled = true;
+    previewContainer.appendChild(characterPreviewRenderer.domElement);
+    
+    // Handle window resize
+    if (characterPreviewResizeHandler) {
+        window.removeEventListener('resize', characterPreviewResizeHandler);
+    }
+    characterPreviewResizeHandler = () => {
+        if (characterPreviewRenderer && previewContainer) {
+            const width = previewContainer.clientWidth;
+            const height = previewContainer.clientHeight;
+            characterPreviewCamera.aspect = width / height;
+            characterPreviewCamera.updateProjectionMatrix();
+            characterPreviewRenderer.setSize(width, height);
+        }
+    };
+    window.addEventListener('resize', characterPreviewResizeHandler);
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    characterPreviewScene.add(ambientLight);
+    
+    characterPreviewLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    characterPreviewLight.position.set(5, 10, 5);
+    characterPreviewLight.castShadow = true;
+    characterPreviewScene.add(characterPreviewLight);
+    
+    const fillLight = new THREE.DirectionalLight(0x00ffff, 0.3);
+    fillLight.position.set(-5, 5, -5);
+    characterPreviewScene.add(fillLight);
+    
+    // Ground plane
+    const groundGeometry = new THREE.PlaneGeometry(10, 10);
+    const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = 0;
+    ground.receiveShadow = true;
+    characterPreviewScene.add(ground);
+    
+    // Load character model (using PFC model as player character)
+    const loader = new GLTFLoader();
+    loader.load(
+        './Assets/PFC.glb',
+        (gltf) => {
+            characterPreviewModel = gltf.scene.clone();
+            
+            // Scale the model
+            characterPreviewModel.scale.set(2.0, 2.0, 2.0);
+            
+            // Get bounding box to position model correctly
+            const box = new THREE.Box3().setFromObject(characterPreviewModel);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            
+            // Position so bottom of model is at ground level
+            characterPreviewModel.position.set(0, size.y / 2 - center.y, 0);
+            
+            // Apply customization colors
+            applyCharacterColors(characterPreviewModel);
+            
+            // Enable shadows
+            characterPreviewModel.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            
+            characterPreviewScene.add(characterPreviewModel);
+            
+            // Adjust camera to show the whole character
+            // Calculate the distance needed to fit the character in view
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const distance = maxDim * 2.5; // Distance multiplier to ensure full visibility
+            
+            // Position camera to show full character
+            characterPreviewCamera.position.set(0, size.y * 0.6, distance);
+            characterPreviewCamera.lookAt(0, size.y * 0.3, 0);
+            characterPreviewCamera.updateProjectionMatrix();
+            
+            // Start animation loop
+            animateCharacterPreview();
+        },
+        undefined,
+        (error) => {
+            console.error('Error loading character model:', error);
+        }
+    );
+    
+    // Set up color selection handlers
+    setupColorHandlers();
+    
+    // Update selected colors in UI
+    updateColorSelection();
+}
+
+function setupColorHandlers() {
+    // Primary color handlers
+    document.querySelectorAll('.color-option').forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove selected class from all primary color options
+            document.querySelectorAll('.color-option').forEach(o => o.classList.remove('selected'));
+            // Add selected class to clicked option
+            option.classList.add('selected');
+            
+            const color = option.dataset.color;
+            if (!gameState.userStats.characterCustomization) {
+                gameState.userStats.characterCustomization = { primaryColor: '#ffffff', secondaryColor: '#333333' };
+            }
+            gameState.userStats.characterCustomization.primaryColor = color;
+            saveUserStats();
+            
+            // Apply color to character model
+            if (characterPreviewModel) {
+                applyCharacterColors(characterPreviewModel);
+            }
+        });
+    });
+    
+    // Secondary color handlers
+    document.querySelectorAll('.color-option-secondary').forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove selected class from all secondary color options
+            document.querySelectorAll('.color-option-secondary').forEach(o => o.classList.remove('selected'));
+            // Add selected class to clicked option
+            option.classList.add('selected');
+            
+            const color = option.dataset.color;
+            if (!gameState.userStats.characterCustomization) {
+                gameState.userStats.characterCustomization = { primaryColor: '#ffffff', secondaryColor: '#333333' };
+            }
+            gameState.userStats.characterCustomization.secondaryColor = color;
+            saveUserStats();
+            
+            // Apply color to character model
+            if (characterPreviewModel) {
+                applyCharacterColors(characterPreviewModel);
+            }
+        });
+    });
+}
+
+function updateColorSelection() {
+    const primaryColor = gameState.userStats.characterCustomization?.primaryColor || '#ffffff';
+    const secondaryColor = gameState.userStats.characterCustomization?.secondaryColor || '#333333';
+    
+    document.querySelectorAll('.color-option').forEach(option => {
+        if (option.dataset.color === primaryColor) {
+            option.classList.add('selected');
+            option.style.border = '3px solid #00ffff';
+            option.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.5)';
+        } else {
+            option.classList.remove('selected');
+            option.style.border = '3px solid transparent';
+            option.style.boxShadow = 'none';
+        }
+    });
+    
+    document.querySelectorAll('.color-option-secondary').forEach(option => {
+        if (option.dataset.color === secondaryColor) {
+            option.classList.add('selected');
+            option.style.border = '3px solid #00ffff';
+            option.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.5)';
+        } else {
+            option.classList.remove('selected');
+            option.style.border = '3px solid transparent';
+            option.style.boxShadow = 'none';
+        }
+    });
+}
+
+// Apply character colors to model
+function applyCharacterColors(model) {
+    if (!model) return;
+    
+    const primaryColor = new THREE.Color(gameState.userStats.characterCustomization?.primaryColor || '#ffffff');
+    const secondaryColor = new THREE.Color(gameState.userStats.characterCustomization?.secondaryColor || '#333333');
+    
+    let meshCount = 0;
+    model.traverse((child) => {
+        if (child.isMesh) {
+            // Alternate between primary and secondary colors
+            if (meshCount % 2 === 0) {
+                child.material = new THREE.MeshStandardMaterial({
+                    color: primaryColor,
+                    roughness: 0.7,
+                    metalness: 0.3
+                });
+            } else {
+                child.material = new THREE.MeshStandardMaterial({
+                    color: secondaryColor,
+                    roughness: 0.7,
+                    metalness: 0.3
+                });
+            }
+            meshCount++;
+        }
+    });
+}
+
+// Animate character preview
+function animateCharacterPreview() {
+    if (!characterPreviewRenderer || !characterPreviewScene || !characterPreviewCamera) return;
+    
+    characterPreviewAnimationFrame = requestAnimationFrame(animateCharacterPreview);
+    
+    // Rotate the character slowly
+    if (characterPreviewModel) {
+        characterPreviewModel.rotation.y += 0.005;
+    }
+    
+    characterPreviewRenderer.render(characterPreviewScene, characterPreviewCamera);
 }
 
 export function showCharacterCustomization() {
     document.getElementById('player-customization').classList.remove('visible');
     document.getElementById('character-customization').classList.add('visible');
+    
+    // Initialize if not already done
+    setTimeout(() => {
+        if (!document.querySelector('#character-preview-container canvas')) {
+            initializeCharacterCustomization();
+        } else {
+            // Update color selection when showing
+            updateColorSelection();
+        }
+    }, 100);
 }
 
 export function hideCharacterCustomization() {
     document.getElementById('character-customization').classList.remove('visible');
     document.getElementById('player-customization').classList.add('visible');
+    
+    // Stop animation when hiding
+    if (characterPreviewAnimationFrame) {
+        cancelAnimationFrame(characterPreviewAnimationFrame);
+        characterPreviewAnimationFrame = null;
+    }
 }
 

@@ -163,8 +163,29 @@ io.on('connection', (socket) => {
         socket.emit('challenge-sent', { targetUsername: targetUsername });
     });
 
-    // Accept a challenge
+    // Accept a challenge (legacy handler)
     socket.on('accept-challenge', () => {
+        handleChallengeAcceptance(socket);
+    });
+    
+    // Challenge response handler (new handler that matches client)
+    socket.on('challenge-response', (data) => {
+        if (data.accepted) {
+            handleChallengeAcceptance(socket);
+        } else {
+            // Challenge rejected
+            const challenge = Array.from(pendingChallenges.values()).find(c => c.targetSocketId === socket.id);
+            if (challenge) {
+                io.to(challenge.challengerSocketId).emit('challenge-rejected', {
+                    targetUsername: challenge.targetUsername
+                });
+                pendingChallenges.delete(challenge.challengerSocketId);
+            }
+        }
+    });
+    
+    // Helper function to handle challenge acceptance
+    function handleChallengeAcceptance(socket) {
         const challenge = Array.from(pendingChallenges.values()).find(c => c.targetSocketId === socket.id);
         if (!challenge) {
             socket.emit('challenge-failed', { reason: 'No pending challenge found' });
@@ -180,20 +201,33 @@ io.on('connection', (socket) => {
         
         // Create room for challenge
         const roomId = `challenge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const challengerData = waitingPlayers.get(challenge.challengerSocketId) || {
+        
+        // Get player data from onlinePlayers map
+        const challengerOnlineData = onlinePlayers.get(challenge.challengerName.toLowerCase());
+        const targetOnlineData = Array.from(onlinePlayers.values()).find(p => p.socketId === socket.id);
+        
+        if (!challengerOnlineData || !targetOnlineData) {
+            console.error('Online player data missing for challenger or target during challenge accept.');
+            socket.emit('challenge-failed', { reason: 'Player data not found.' });
+            challengerSocket.emit('challenge-failed', { reason: 'Player data not found.' });
+            pendingChallenges.delete(challenge.challengerSocketId);
+            return;
+        }
+        
+        const challengerData = {
             id: challenge.challengerSocketId,
             socket: challengerSocket,
-            name: challenge.challengerName,
-            stats: {},
-            ready: false
+            name: challengerOnlineData.username,
+            stats: challengerOnlineData.stats || {},
+            ready: true // Auto-ready for challenges
         };
         
-        const targetData = waitingPlayers.get(socket.id) || {
+        const targetData = {
             id: socket.id,
             socket: socket,
-            name: socket.handshake.auth?.username || 'Player',
-            stats: {},
-            ready: false
+            name: targetOnlineData.username,
+            stats: targetOnlineData.stats || {},
+            ready: true // Auto-ready for challenges
         };
         
         const room = {
@@ -229,24 +263,18 @@ io.on('connection', (socket) => {
         waitingPlayers.delete(targetData.id);
         pendingChallenges.delete(challenge.challengerSocketId);
         
-        // Get challenger stats from onlinePlayers
-        const challengerOnlineData = onlinePlayers.get(challenge.challengerName.toLowerCase());
-        if (challengerOnlineData && challengerOnlineData.stats) {
-            challengerData.stats = challengerOnlineData.stats;
+        // Update player statuses to "in-battle"
+        if (challengerOnlineData) {
+            challengerOnlineData.status = 'in-battle';
         }
-        
-        // Get target stats from onlinePlayers
-        const targetOnlineData = Array.from(onlinePlayers.values()).find(p => p.socketId === socket.id);
-        if (targetOnlineData && targetOnlineData.stats) {
-            targetData.stats = targetOnlineData.stats;
+        if (targetOnlineData) {
+            targetOnlineData.status = 'in-battle';
         }
-        
-        // Update room with player data
-        room.players = [challengerData, targetData];
+        broadcastOnlinePlayers();
         
         // Start game immediately (no ready button needed for challenges)
         startGame(roomId);
-    });
+    }
 
     // Reject a challenge
     socket.on('reject-challenge', () => {

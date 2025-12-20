@@ -2,7 +2,8 @@
 
 import { io } from 'socket.io-client';
 import * as gameState from './gameState.js';
-import { updateHealthBar, updateOpponentHealthBar } from './ui.js';
+import { setSocket, setOnlinePlayersList, setIsPvPMode, setPlayerHealth, setMatchmakingActive, setGameMode, setCurrentPvPOpponentStats } from './gameState.js';
+import { updateHealthBar, updateOpponentHealthBar, updateHUD } from './ui.js';
 import { endGame } from './gameLogic.js';
 import { opponentGroup, opponentMuzzleLight } from './gameObjects.js';
 import * as THREE from 'three';
@@ -67,16 +68,16 @@ const TWEEN = {
 
 export function initializeNetworking() {
     try {
-        gameState.socket = io(SERVER_URL, {
+        setSocket(io(SERVER_URL, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 5,
             timeout: 20000
-        });
+        }));
         
         gameState.socket.on('online-players-list', (players) => {
-            gameState.onlinePlayersList = players || [];
+            setOnlinePlayersList(players || []);
             if (window.addOnlinePlayersToGrid) {
                 window.addOnlinePlayersToGrid();
             }
@@ -94,7 +95,7 @@ export function initializeNetworking() {
         });
         
         gameState.socket.on('online-players-update', (players) => {
-            gameState.onlinePlayersList = players || [];
+            setOnlinePlayersList(players || []);
             if (window.addOnlinePlayersToGrid) {
                 window.addOnlinePlayersToGrid();
             }
@@ -105,11 +106,11 @@ export function initializeNetworking() {
             document.getElementById('main-menu').classList.add('hidden');
             
             if (data.opponent && data.opponent.stats) {
-                gameState.currentPvPOpponentStats = data.opponent.stats;
+                setCurrentPvPOpponentStats(data.opponent.stats);
             }
             
-            gameState.isPvPMode = true;
-            gameState.gameMode = 'pvp';
+            setIsPvPMode(true);
+            setGameMode('pvp');
             if (window.startPvPGame) {
                 window.startPvPGame(data);
             }
@@ -119,8 +120,8 @@ export function initializeNetworking() {
             handleOpponentAction(data);
         });
         
-        gameState.socket.on('health-update', (data) => {
-            gameState.playerHealth = data.health;
+        gameState.        socket.on('health-update', (data) => {
+            setPlayerHealth(data.health);
             updateHealthBar();
         });
         
@@ -152,8 +153,8 @@ export function initializeNetworking() {
             newAcceptBtn.addEventListener('click', () => {
                 popup.classList.add('hidden');
                 gameState.socket.emit('challenge-response', { accepted: true });
-                gameState.matchmakingActive = true;
-                showMatchmakingUI();
+                // Don't show matchmaking UI - game should start immediately
+                updateHUD('Challenge accepted! Starting game...', '#00ff00');
             });
             
             newRejectBtn.addEventListener('click', () => {
@@ -318,7 +319,7 @@ export function showMatchmakingUI() {
 
 export function hideMatchmakingUI() {
     document.getElementById('matchmaking-ui').classList.add('hidden');
-    gameState.matchmakingActive = false;
+    setMatchmakingActive(false);
 }
 
 // Export for use in other modules

@@ -13,6 +13,16 @@ export class GunController {
     }
 
     async initialize() {
+        // Only request permission on mobile devices
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                        (typeof window.orientation !== 'undefined') ||
+                        ('ontouchstart' in window) ||
+                        (navigator.maxTouchPoints > 0);
+        
+        if (!isMobile) {
+            return false;
+        }
+        
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
             try {
                 const response = await DeviceOrientationEvent.requestPermission();
