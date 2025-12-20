@@ -152,34 +152,28 @@ export function loadOpponentModel() {
                 opponentGroup.userData.healthBarFill = healthBarFill3D;
                 opponentGroup.userData.healthBarBg = healthBarBg;
                 
-                // Create 3D stamina bar (below health bar)
-                const staminaBarWidth = 2;
-                const staminaBarHeight = 0.25;
-                const staminaBarGeo = new THREE.PlaneGeometry(staminaBarWidth, staminaBarHeight);
-                const staminaBarBgMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0x000000, 
-                    transparent: true, 
-                    opacity: 0.7,
-                    side: THREE.DoubleSide
-                });
-                const staminaBarBg = new THREE.Mesh(staminaBarGeo, staminaBarBgMaterial);
-                staminaBarBg.position.set(0, size.y + 0.6, 0); // Below health bar
-                opponentGroup.add(staminaBarBg);
+                // Create 3D charge dots (below health bar) - matching player's charge system
+                const chargeDots = [];
+                const chargeDotRadius = 0.15;
+                const chargeDotSpacing = 0.4;
+                const chargeDotStartX = -chargeDotSpacing; // Center the 3 dots
                 
-                const staminaBarFillGeo = new THREE.PlaneGeometry(staminaBarWidth, staminaBarHeight);
-                const staminaBarFillMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0xffff00, 
-                    transparent: true, 
-                    opacity: 1.0,
-                    side: THREE.DoubleSide
-                });
-                const staminaBarFill3D = new THREE.Mesh(staminaBarFillGeo, staminaBarFillMaterial);
-                staminaBarFill3D.position.set(0, size.y + 0.6, 0.01); // Below health bar
-                staminaBarFill3D.scale.x = 1;
-                opponentGroup.add(staminaBarFill3D);
+                for (let i = 0; i < 3; i++) {
+                    const chargeDotGeo = new THREE.SphereGeometry(chargeDotRadius, 8, 8);
+                    const chargeDotMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0xffff00, 
+                        transparent: true, 
+                        opacity: 1.0,
+                        side: THREE.DoubleSide
+                    });
+                    const chargeDot = new THREE.Mesh(chargeDotGeo, chargeDotMaterial);
+                    chargeDot.position.set(chargeDotStartX + i * chargeDotSpacing, size.y + 0.6, 0);
+                    chargeDot.name = `opponent-charge-${i}`;
+                    opponentGroup.add(chargeDot);
+                    chargeDots.push(chargeDot);
+                }
                 
-                opponentGroup.userData.staminaBarFill = staminaBarFill3D;
-                opponentGroup.userData.staminaBarBg = staminaBarBg;
+                opponentGroup.userData.chargeDots = chargeDots;
                 
                 // Create guard direction indicator (For Honor style) - above head
                 const guardIndicatorGroup = new THREE.Group();

@@ -3,7 +3,7 @@
 import * as gameState from './gameState.js';
 import { camera } from './sceneSetup.js';
 import { opponentGroup } from './gameObjects.js';
-import { ATTACK_DIRECTIONS, BLOCK_PERFECT_ZONE_START, BLOCK_PERFECT_ZONE_END, BLOCK_GOOD_ZONE_START, BLOCK_GOOD_ZONE_END } from './config.js';
+import { ATTACK_DIRECTIONS, BLOCK_PERFECT_ZONE_START, BLOCK_PERFECT_ZONE_END, BLOCK_GOOD_ZONE_START, BLOCK_GOOD_ZONE_END, MAX_ATTACK_CHARGES, CHARGE_REGEN_TIME } from './config.js';
 
 // Get UI elements
 const hud = document.getElementById('hud');
@@ -75,19 +75,42 @@ export function updateDirectionIndicator() {
     }
 }
 
-// Update player stamina bar
+// Update player attack charges display
 export function updateStaminaBar() {
-    if (!staminaBarFill) return;
-    const percentage = Math.max(0, Math.min(100, gameState.playerStamina));
-    staminaBarFill.style.width = percentage + '%';
+    const now = Date.now();
+    const availableCharges = gameState.availableCharges;
+    const chargeRegenTimers = gameState.chargeRegenTimers;
     
-    // Change color based on stamina level
-    if (percentage > 60) {
-        staminaBarFill.style.background = 'linear-gradient(90deg, #ffff00, #ffaa00)';
-    } else if (percentage > 30) {
-        staminaBarFill.style.background = 'linear-gradient(90deg, #ffaa00, #ff6600)';
-    } else {
-        staminaBarFill.style.background = 'linear-gradient(90deg, #ff6600, #ff0000)';
+    // Update each charge dot
+    for (let i = 0; i < MAX_ATTACK_CHARGES; i++) {
+        const chargeDot = document.getElementById(`charge-${i}`);
+        if (!chargeDot) continue;
+        
+        // Reset classes
+        chargeDot.classList.remove('available', 'used', 'regen');
+        chargeDot.style.opacity = '';
+        
+        if (i < availableCharges) {
+            // Charge is available
+            chargeDot.classList.add('available');
+        } else {
+            // Charge is used - find the corresponding timer (oldest first)
+            const usedChargeIndex = i - availableCharges; // Which used charge this is (0 = first used, 1 = second used, etc.)
+            const sortedTimers = [...chargeRegenTimers].sort((a, b) => a.readyTime - b.readyTime);
+            const regenTimer = sortedTimers[usedChargeIndex];
+            
+            if (regenTimer && regenTimer.readyTime > now) {
+                // Still regenerating
+                const elapsed = now - (regenTimer.readyTime - CHARGE_REGEN_TIME);
+                const progress = Math.min(1, Math.max(0, elapsed / CHARGE_REGEN_TIME));
+                
+                chargeDot.classList.add('regen');
+                chargeDot.style.opacity = 0.3 + (progress * 0.5);
+            } else {
+                // Used (waiting to be regenerated or timer not found)
+                chargeDot.classList.add('used');
+            }
+        }
     }
 }
 
@@ -114,26 +137,51 @@ export function updateOpponentHealthBar() {
     }
 }
 
-// Update opponent stamina bar (3D)
+// Update opponent stamina bar (3D) - now shows charges like player
 export function updateOpponentStaminaBar() {
-    const percentage = Math.max(0, Math.min(100, gameState.opponentStamina));
+    const now = Date.now();
+    const availableCharges = gameState.opponentAvailableCharges;
+    const chargeRegenTimers = gameState.opponentChargeRegenTimers;
     
-    if (opponentGroup.userData.staminaBarFill) {
-        const staminaBarFill3D = opponentGroup.userData.staminaBarFill;
-        staminaBarFill3D.scale.x = percentage / 100;
+    if (!opponentGroup.userData.chargeDots) return;
+    
+    const chargeDots = opponentGroup.userData.chargeDots;
+    
+    // Update each charge dot
+    for (let i = 0; i < MAX_ATTACK_CHARGES; i++) {
+        const chargeDot = chargeDots[i];
+        if (!chargeDot) continue;
         
-        // Change color based on stamina level
-        if (percentage > 60) {
-            staminaBarFill3D.material.color.setHex(0xffff00);
-        } else if (percentage > 30) {
-            staminaBarFill3D.material.color.setHex(0xffaa00);
+        // Make sure it faces the camera
+        chargeDot.lookAt(camera.position);
+        
+        if (i < availableCharges) {
+            // Charge is available - bright yellow
+            chargeDot.material.color.setHex(0xffff00);
+            chargeDot.material.opacity = 1.0;
+            chargeDot.scale.set(1, 1, 1);
         } else {
-            staminaBarFill3D.material.color.setHex(0xff6600);
-        }
-        
-        staminaBarFill3D.lookAt(camera.position);
-        if (opponentGroup.userData.staminaBarBg) {
-            opponentGroup.userData.staminaBarBg.lookAt(camera.position);
+            // Charge is used - find the corresponding timer (oldest first)
+            const usedChargeIndex = i - availableCharges;
+            const sortedTimers = [...chargeRegenTimers].sort((a, b) => a.readyTime - b.readyTime);
+            const regenTimer = sortedTimers[usedChargeIndex];
+            
+            if (regenTimer && regenTimer.readyTime > now) {
+                // Still regenerating - orange with pulsing effect
+                const elapsed = now - (regenTimer.readyTime - CHARGE_REGEN_TIME);
+                const progress = Math.min(1, Math.max(0, elapsed / CHARGE_REGEN_TIME));
+                
+                chargeDot.material.color.setHex(0xffaa00);
+                chargeDot.material.opacity = 0.3 + (progress * 0.5);
+                // Pulse effect
+                const pulseScale = 0.8 + (Math.sin(now * 0.01) * 0.2);
+                chargeDot.scale.set(pulseScale, pulseScale, pulseScale);
+            } else {
+                // Used (waiting to be regenerated) - gray
+                chargeDot.material.color.setHex(0x666666);
+                chargeDot.material.opacity = 0.3;
+                chargeDot.scale.set(0.8, 0.8, 0.8);
+            }
         }
     }
 }

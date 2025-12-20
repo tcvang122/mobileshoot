@@ -2,8 +2,8 @@
 
 import * as THREE from 'three';
 import * as gameState from './gameState.js';
-import { setGameStarted, setOpponentHealth, setPlayerHealth, setLastAttackTime, setLastImportantMessageTime, setEnemyAttackPhase, setEnemyPatternType, setEnemyPatternAttackCount, setEnemyNextPatternTime, setOpponentLastAttackTime, setOrientationEnabled, setIsAttacking, setAttackCooldown, setOPPONENT_ATTACK_INTERVAL, setOpponentIncomingAttackDirection, setOpponentAttackWindupTime, setOpponentCurrentDirection, setOpponentGuardDirection, setPlayerStamina, setParryWindow, setOpponentAttackType } from './gameState.js';
-import { weapons, ATTACK_TYPES, ATTACK_COOLDOWN, OPPONENT_ATTACK_WINDUP_TIME, PARRY_WINDOW, GUARD_DIRECTIONS, BLOCK_TIMING_SLIDER_DURATION } from './config.js';
+import { setGameStarted, setOpponentHealth, setPlayerHealth, setLastAttackTime, setLastImportantMessageTime, setEnemyAttackPhase, setEnemyPatternType, setEnemyPatternAttackCount, setEnemyNextPatternTime, setOpponentLastAttackTime, setOrientationEnabled, setIsAttacking, setAttackCooldown, setOPPONENT_ATTACK_INTERVAL, setOpponentIncomingAttackDirection, setOpponentAttackWindupTime, setOpponentCurrentDirection, setOpponentGuardDirection, setPlayerStamina, setParryWindow, setOpponentAttackType, consumeCharge, consumeOpponentCharge, incrementPlayerBlocks, incrementPlayerHits, incrementOpponentHits, setAvailableCharges } from './gameState.js';
+import { weapons, ATTACK_TYPES, ATTACK_COOLDOWN, OPPONENT_ATTACK_WINDUP_TIME, PARRY_WINDOW, GUARD_DIRECTIONS, BLOCK_TIMING_SLIDER_DURATION, MAX_ATTACK_CHARGES } from './config.js';
 import { updateOpponentAttackIndicator, showBlockNotification, showBlockTimingSlider, triggerBlockTiming, hideBlockTimingSlider } from './ui.js';
 import { combatController } from './controls.js';
 import { scene, camera, renderer } from './sceneSetup.js';
@@ -181,47 +181,38 @@ export function updateOpponentAnimation() {
 export function opponentAttack() {
     if (!gameState.gameStarted || gameState.opponentHealth <= 0 || gameState.playerHealth <= 0) return;
     
+    // Check opponent attack charges (opponent can attack anytime if they have charges)
+    if (gameState.opponentAvailableCharges <= 0) {
+        return; // No charges available, wait for regen
+    }
+    
     const now = Date.now();
+    
+    // Minimum cooldown between attacks (even with charges available) to prevent spam
+    // This ensures charges are the main limiter, but we still have a small delay between attacks
+    const MIN_ATTACK_COOLDOWN = 1200; // 1200ms (1.2 seconds) minimum between attacks
+    if (now - gameState.opponentLastAttackTime < MIN_ATTACK_COOLDOWN) {
+        return; // Too soon since last attack
+    }
+    
+    // Consume a charge before attacking
+    if (!consumeOpponentCharge()) {
+        console.warn('Failed to consume opponent charge - charges:', gameState.opponentAvailableCharges);
+        return; // Failed to consume charge (shouldn't happen, but safety check)
+    }
+    
+    console.log('Opponent attacking - remaining charges:', gameState.opponentAvailableCharges);
+    
+    // Update attack time immediately to prevent rapid attacks
+    setOpponentLastAttackTime(now);
+    
     const newPhase = getEnemyAttackPhase();
     setEnemyAttackPhase(newPhase);
     const pattern = getEnemyAttackPattern(newPhase);
     
-    let baseInterval = gameState.OPPONENT_ATTACK_INTERVAL;
-    const phaseMultipliers = {
-        'normal': 1.0,
-        'aggressive': 0.7,
-        'desperate': 0.5
-    };
-    baseInterval *= (phaseMultipliers[gameState.enemyAttackPhase] || 1.0);
-    
-    const patternIntervals = {
-        'single': baseInterval,
-        'burst': baseInterval * 0.3,
-        'rapid': baseInterval * 0.2
-    };
-    const currentInterval = patternIntervals[pattern] || baseInterval;
-    
-    if (now - gameState.opponentLastAttackTime < currentInterval) return;
-    
-    if (pattern === 'burst') {
-        if (gameState.enemyPatternAttackCount >= 3) {
-            setEnemyPatternAttackCount(0);
-            setOpponentLastAttackTime(now);
-            setEnemyNextPatternTime(now + 1000);
-            return;
-        }
-        setEnemyPatternAttackCount(gameState.enemyPatternAttackCount + 1);
-    } else if (pattern === 'rapid') {
-        if (gameState.enemyPatternAttackCount >= 5) {
-            setEnemyPatternAttackCount(0);
-            setOpponentLastAttackTime(now);
-            setEnemyNextPatternTime(now + 800);
-            return;
-        }
-        setEnemyPatternAttackCount(gameState.enemyPatternAttackCount + 1);
-    } else {
-        setEnemyPatternAttackCount(0);
-    }
+    // Note: Pattern logic removed - charges are now the main limiter
+    // Patterns can be re-added later if needed for variety, but for now charges control attack frequency
+    setEnemyPatternAttackCount(0);
     
     // Randomly select opponent attack direction (For Honor: only UP, LEFT, RIGHT for guard)
     const guardDirections = ['up', 'left', 'right'];
@@ -350,23 +341,27 @@ export function opponentAttack() {
             }
             
             if (timingResult === 'perfect') {
-                // Perfect parry!
+                // Perfect parry! - Gives a charge back as reward
                 console.log('✓ PERFECT PARRY - Perfect timing! Counter-attack opportunity!');
-                const currentStamina = gameState.playerStamina || 100;
-                setPlayerStamina(Math.min(100, currentStamina + 15));
-                updateStaminaBar();
+                incrementPlayerBlocks();
+                if (gameState.availableCharges < MAX_ATTACK_CHARGES) {
+                    setAvailableCharges(gameState.availableCharges + 1);
+                    updateStaminaBar();
+                }
                 updateHUD("PERFECT BLOCK! COUNTER-ATTACK!", "#00ff00");
                 showBlockNotification('opponent');
                 hideBlockTimingSlider();
             } else if (timingResult === 'good' && !isUnblockable) {
                 // Good block
                 console.log('✓ GOOD BLOCK - Blocked with good timing!');
+                incrementPlayerBlocks();
                 updateHUD("BLOCKED!", "#00ffff");
                 showBlockNotification('opponent');
                 hideBlockTimingSlider();
             } else if (playerBlocked && !isUnblockable && timingResult === null) {
                 // Blocked but timing slider wasn't active (fallback)
                 console.log('✓ BLOCKED - No damage taken!');
+                incrementPlayerBlocks();
                 updateHUD("BLOCKED!", "#00ffff");
                 showBlockNotification('opponent');
                 hideBlockTimingSlider();
@@ -395,11 +390,15 @@ export function opponentAttack() {
                     .start();
                 
             if (isParry) {
+                incrementPlayerBlocks();
                 updateHUD("PARRY! COUNTER-ATTACK!", "#00ff00");
-                // Parry gives stamina boost and counter-attack opportunity
-                const currentStamina = gameState.playerStamina || 100;
-                setPlayerStamina(Math.min(100, currentStamina + 10));
+                // Parry gives a charge back as reward
+                if (gameState.availableCharges < MAX_ATTACK_CHARGES) {
+                    setAvailableCharges(gameState.availableCharges + 1);
+                    updateStaminaBar();
+                }
             } else {
+                incrementPlayerBlocks();
                 updateHUD("BLOCKED!", "#00ffff");
             }
             
@@ -422,6 +421,7 @@ export function opponentAttack() {
                 console.log(`Health: ${oldHealth} → ${newPlayerHealth}`);
                 
                 setPlayerHealth(newPlayerHealth);
+                incrementOpponentHits();
                 updateHealthBar();
                 
                 // Visual effect at player position
@@ -580,11 +580,15 @@ export function opponentAttack() {
                     .start();
                 
                 if (isParry) {
+                    incrementPlayerBlocks();
                     updateHUD("PERFECT BLOCK! COUNTER-ATTACK!", "#00ff00");
-                    const currentStamina = gameState.playerStamina || 100;
-                    setPlayerStamina(Math.min(100, currentStamina + 15));
-                    updateStaminaBar();
+                    // Perfect block gives a charge back (bonus)
+                    if (gameState.availableCharges < MAX_ATTACK_CHARGES) {
+                        setAvailableCharges(gameState.availableCharges + 1);
+                        updateStaminaBar();
+                    }
                 } else {
+                    incrementPlayerBlocks();
                     updateHUD("BLOCKED!", "#00ffff");
                 }
                 
@@ -627,17 +631,17 @@ export function handlePlayerAttack(direction, attackType) {
         return;
     }
     
-    // Check stamina
-    const selectedWeapon = weapons.find(w => w.id === gameState.userStats.selectedWeapon) || weapons[0];
-    const staminaCost = selectedWeapon.staminaCost[attackType] || 10;
-    
-    if (gameState.playerStamina < staminaCost) {
-        updateHUD("NOT ENOUGH STAMINA!", "#ff0000");
+    // Check attack charges
+    if (gameState.availableCharges <= 0) {
+        updateHUD("NO ATTACK CHARGES! WAIT FOR REGEN", "#ff0000");
         return;
     }
     
-    // Consume stamina
-    setPlayerStamina(gameState.playerStamina - staminaCost);
+    // Consume a charge
+    if (!consumeCharge()) {
+        updateHUD("NO ATTACK CHARGES! WAIT FOR REGEN", "#ff0000");
+        return;
+    }
     updateStaminaBar();
     
     if (gameState.isAttacking || gameState.attackCooldown) {
@@ -645,6 +649,9 @@ export function handlePlayerAttack(direction, attackType) {
     }
     
     const now = Date.now();
+    
+    // Get selected weapon for attack speeds
+    const selectedWeapon = weapons.find(w => w.id === gameState.userStats.selectedWeapon) || weapons[0];
     
     // Use For Honor style attack speeds
     let attackSpeed;
@@ -790,6 +797,7 @@ export function handlePlayerAttack(direction, attackType) {
             console.log(`Opponent health: ${oldHealth} → ${newOpponentHealth}`);
             
             setOpponentHealth(newOpponentHealth);
+            incrementPlayerHits();
             
             if (gameState.isPvPMode && window.sendPlayerHit) {
                 window.sendPlayerHit(damage);
@@ -862,16 +870,41 @@ export function endGame(victory) {
     
     saveUserStats();
     
-    setTimeout(() => {
-        document.getElementById('main-menu').classList.remove('hidden');
-        if (window.updateUserProfile) window.updateUserProfile();
-        updateHUD("STATUS: WAITING", "");
-        const hud = document.getElementById('hud');
-        hud.classList.remove('holstered', 'firing');
-        if (opponentModel) {
-            opponentGroup.rotation.set(0, 0, 0);
-        }
-    }, 3000);
+    // Show game over screen with stats
+    showGameOverScreen(victory);
+}
+
+function showGameOverScreen(victory) {
+    const gameOverScreen = document.getElementById('game-over-screen');
+    const title = document.getElementById('game-over-title');
+    const playerHp = document.getElementById('stat-player-hp');
+    const opponentHp = document.getElementById('stat-opponent-hp');
+    const blocks = document.getElementById('stat-blocks');
+    const playerHits = document.getElementById('stat-player-hits');
+    const opponentHits = document.getElementById('stat-opponent-hits');
+    
+    if (!gameOverScreen) return;
+    
+    // Update title
+    if (victory) {
+        title.textContent = 'VICTORY';
+        title.style.color = '#00ff00';
+        title.style.textShadow = '0 0 10px rgba(0, 255, 0, 0.5)';
+    } else {
+        title.textContent = 'DEFEAT';
+        title.style.color = '#ff0000';
+        title.style.textShadow = '0 0 10px rgba(255, 0, 0, 0.5)';
+    }
+    
+    // Update stats
+    playerHp.textContent = Math.max(0, Math.round(gameState.playerHealth)) + ' HP';
+    opponentHp.textContent = Math.max(0, Math.round(gameState.opponentHealth)) + ' HP';
+    blocks.textContent = gameState.playerBlocks;
+    playerHits.textContent = gameState.playerHits;
+    opponentHits.textContent = gameState.opponentHits;
+    
+    // Show screen
+    gameOverScreen.classList.remove('hidden');
 }
 
 // Export TWEEN for use in other modules

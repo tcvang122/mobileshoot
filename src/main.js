@@ -12,6 +12,8 @@ window.addEventListener('error', (event) => {
         errorMessage.includes('asynchronous response') ||
         errorMessage.includes('listener indicated an asynchronous response') ||
         errorMessage.includes('A listener indicated an asynchronous response') ||
+        errorMessage.includes('runtime.lastError') ||
+        errorMessage.includes('Unchecked runtime.lastError') ||
         errorSource.includes('extension://') ||
         errorSource.includes('solanaActionsContentScript') ||
         errorSource.includes('chrome-extension://') ||
@@ -29,7 +31,9 @@ window.addEventListener('unhandledrejection', (event) => {
     if (errorMessage.includes('message channel closed') || 
         errorMessage.includes('asynchronous response') ||
         errorMessage.includes('listener indicated an asynchronous response') ||
-        errorMessage.includes('A listener indicated an asynchronous response')) {
+        errorMessage.includes('A listener indicated an asynchronous response') ||
+        errorMessage.includes('runtime.lastError') ||
+        errorMessage.includes('Unchecked runtime.lastError')) {
         event.preventDefault();
         event.stopPropagation();
     }
@@ -44,6 +48,8 @@ console.error = function(...args) {
         message.includes('asynchronous response') ||
         message.includes('listener indicated an asynchronous response') ||
         message.includes('A listener indicated an asynchronous response') ||
+        message.includes('runtime.lastError') ||
+        message.includes('Unchecked runtime.lastError') ||
         message.includes('solanaActionsContentScript') ||
         message.includes('extension://') ||
         message.includes('chrome-extension://') ||
@@ -58,6 +64,8 @@ console.warn = function(...args) {
         message.includes('asynchronous response') ||
         message.includes('listener indicated an asynchronous response') ||
         message.includes('A listener indicated an asynchronous response') ||
+        message.includes('runtime.lastError') ||
+        message.includes('Unchecked runtime.lastError') ||
         message.includes('extension://')) {
         return;
     }
@@ -78,7 +86,7 @@ import { handlePlayerAttack, opponentAttack, updateOpponentAnimation, endGame, T
 import { checkSession, loginAccount, createAccount, logout, saveUserStats, loadUserStats, updateRank } from './auth.js';
 import { initializeMenu, updateUserProfile, initializeCustomization, showCustomization, hideCustomization, showCharacterCustomization, hideCharacterCustomization, initializeCharacterCustomization } from './menu.js';
 import { initializeNetworking, challengePlayer, calculatePlayerReward, fetchOnlinePlayers, addOnlinePlayersToGrid, sendPlayerAction, sendPlayerHit, showMatchmakingUI, hideMatchmakingUI } from './networking.js';
-import { setGyroEnabled, setGyroscopePermissionGranted, setGyroCalibration, setLastGyroValues, setCurrentOpponentData, setGameStarted, setOpponentHealth, setPlayerHealth, setOrientationEnabled, setOPPONENT_ATTACK_INTERVAL, setEnemyAttackPhase, setEnemyPatternAttackCount, setEnemyPatternType, setEnemyNextPatternTime, setSocket, setCurrentDirection, setPlayerStamina, setOpponentStamina } from './gameState.js';
+import { setGyroEnabled, setGyroscopePermissionGranted, setGyroCalibration, setLastGyroValues, setCurrentOpponentData, setGameStarted, setOpponentHealth, setPlayerHealth, setOrientationEnabled, setOPPONENT_ATTACK_INTERVAL, setEnemyAttackPhase, setEnemyPatternAttackCount, setEnemyPatternType, setEnemyNextPatternTime, setSocket, setCurrentDirection, setPlayerStamina, setOpponentStamina, updateChargeRegeneration, resetCharges, updateOpponentChargeRegeneration, resetOpponentCharges, resetGameStats } from './gameState.js';
 
 // ============================================
 // GYROSCOPE PERMISSION
@@ -520,6 +528,9 @@ async function startGame(opponentData) {
     setPlayerHealth(100);
     setPlayerStamina(MAX_STAMINA);
     setOpponentStamina(MAX_STAMINA);
+    resetCharges(); // Reset player attack charges
+    resetOpponentCharges(); // Reset opponent attack charges
+    resetGameStats(); // Reset game stats (blocks, hits)
     
     // Load models before setting visibility
     if (!opponentModel) {
@@ -595,6 +606,8 @@ async function startPvPGame(data) {
     setPlayerHealth(100);
     setPlayerStamina(MAX_STAMINA); // Initialize stamina
     setOpponentStamina(MAX_STAMINA);
+    resetCharges(); // Reset player attack charges
+    resetOpponentCharges(); // Reset opponent attack charges
     
     // Load models before setting visibility
     if (!opponentModel) {
@@ -687,13 +700,7 @@ function animate(time) {
             }
         }
         
-        // Make stamina bar always face camera
-        if (opponentGroup.userData.staminaBarFill) {
-            opponentGroup.userData.staminaBarFill.lookAt(camera.position);
-            if (opponentGroup.userData.staminaBarBg) {
-                opponentGroup.userData.staminaBarBg.lookAt(camera.position);
-            }
-        }
+        // Charge dots are handled in updateOpponentStaminaBar() which makes them face camera
         
         // Make guard indicator always face camera
         if (opponentGroup.userData.guardIndicator) {
@@ -704,16 +711,15 @@ function animate(time) {
             opponentAttack();
         }
         
-        // Regenerate stamina (For Honor style)
-        if (gameState.gameStarted && gameState.playerStamina < MAX_STAMINA) {
-            const regenAmount = (STAMINA_REGEN_RATE / 60); // Per frame at 60fps
-            const newStamina = Math.min(MAX_STAMINA, (gameState.playerStamina || MAX_STAMINA) + regenAmount);
-            setPlayerStamina(newStamina);
-            updateStaminaBar();
+        // Regenerate attack charges (player and opponent)
+        if (gameState.gameStarted) {
+            updateChargeRegeneration();
+            updateOpponentChargeRegeneration();
+            updateStaminaBar(); // Update charge display
         }
         
-        // Update opponent stamina bar (3D)
-        if (opponentGroup.userData.staminaBarFill) {
+        // Update opponent charge dots (3D)
+        if (opponentGroup.userData.chargeDots) {
             updateOpponentStaminaBar();
         }
     }
@@ -741,10 +747,37 @@ function initializeGame() {
     updateHealthBar();
     updateDirectionIndicator();
 
+    // Set up window resize handler
+    window.addEventListener('resize', handleResize);
+    // Call handleResize initially to ensure proper sizing
+    handleResize();
+
     // Export functions for use by other modules
     window.startGame = startGame;
     window.startPvPGame = startPvPGame;
     window.endGame = endGame;
+    
+    // Game over screen button handler
+    const btnReturnToMenu = document.getElementById('btn-return-to-menu');
+    if (btnReturnToMenu) {
+        btnReturnToMenu.addEventListener('click', () => {
+            const gameOverScreen = document.getElementById('game-over-screen');
+            if (gameOverScreen) {
+                gameOverScreen.classList.add('hidden');
+            }
+            
+            document.getElementById('main-menu').classList.remove('hidden');
+            if (window.updateUserProfile) window.updateUserProfile();
+            updateHUD("STATUS: WAITING", "");
+            const hud = document.getElementById('hud');
+            if (hud) {
+                hud.classList.remove('holstered', 'firing');
+            }
+            if (opponentModel) {
+                opponentGroup.rotation.set(0, 0, 0);
+            }
+        });
+    }
     window.updateUserProfile = updateUserProfile;
     window.saveUserStats = saveUserStats;
     window.calculatePlayerReward = calculatePlayerReward;

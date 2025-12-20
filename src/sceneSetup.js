@@ -7,17 +7,37 @@ export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.FogExp2(0x87ceeb, 0.01);
 
+// Get container dimensions
+function getContainerSize() {
+    const container = document.getElementById('game-container');
+    if (container) {
+        return {
+            width: container.clientWidth || window.innerWidth,
+            height: container.clientHeight || window.innerHeight
+        };
+    }
+    return {
+        width: window.innerWidth,
+        height: window.innerHeight
+    };
+}
+
+const containerSize = getContainerSize();
+
 // Camera
-export const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+export const camera = new THREE.PerspectiveCamera(75, containerSize.width / containerSize.height, 0.1, 1000);
 camera.position.set(0, 1.7, 0);
 camera.lookAt(0, 1.7, -10);
 
 // Renderer
 export const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(containerSize.width, containerSize.height);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-document.getElementById('game-container').appendChild(renderer.domElement);
+const container = document.getElementById('game-container');
+if (container) {
+    container.appendChild(renderer.domElement);
+}
 
 // Materials
 export const materialMetal = new THREE.MeshStandardMaterial({ 
@@ -285,8 +305,9 @@ export function setupScene() {
 
 // Handle window resize
 export function handleResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    const size = getContainerSize();
+    camera.aspect = size.width / size.height;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(size.width, size.height);
 }
 

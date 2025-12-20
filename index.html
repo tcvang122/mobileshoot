@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Phone Gun Prototype</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #e0e0e0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #e0e0e0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #game-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; }
+        #game-container canvas { display: block; width: 100% !important; height: 100% !important; }
         
         /* UI Overlay */
         #ui-layer {
@@ -215,14 +216,19 @@
             pointer-events: none;
         }
         
-        /* Player Stamina Bar */
+        /* Player Attack Charges */
         #stamina-bar-container {
             position: absolute; top: 60px; left: 20px;
-            width: 200px; height: 25px;
+            width: 200px; height: 50px;
             background: rgba(0, 0, 0, 0.5);
             border: 2px solid rgba(255, 200, 0, 0.8);
             border-radius: 4px;
-            overflow: hidden;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
             z-index: 10;
             opacity: 0;
             transition: opacity 0.3s;
@@ -230,18 +236,45 @@
         #stamina-bar-container.visible {
             opacity: 1;
         }
-        #stamina-bar-fill {
-            height: 100%;
-            width: 100%;
-            background: linear-gradient(90deg, #ffff00, #ffaa00);
-            transition: width 0.3s ease;
-        }
         #stamina-bar-label {
-            position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
             color: white; font-family: monospace; font-size: 0.8rem;
             font-weight: bold; text-shadow: 1px 1px 2px black;
             pointer-events: none;
+            margin: 0;
+        }
+        #charge-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+        }
+        .charge-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #ffff00, #ffaa00);
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 8px rgba(255, 200, 0, 0.6);
+            transition: all 0.3s ease;
+        }
+        .charge-dot.available {
+            background: linear-gradient(135deg, #ffff00, #ffaa00);
+            opacity: 1;
+            transform: scale(1);
+        }
+        .charge-dot.used {
+            background: linear-gradient(135deg, #666666, #333333);
+            opacity: 0.3;
+            transform: scale(0.8);
+        }
+        .charge-dot.regen {
+            background: linear-gradient(135deg, #ffaa00, #ff6600);
+            opacity: 0.6;
+            animation: chargePulse 1s ease-in-out infinite;
+        }
+        @keyframes chargePulse {
+            0%, 100% { transform: scale(0.8); opacity: 0.6; }
+            50% { transform: scale(1); opacity: 0.8; }
         }
         
         /* Direction Indicator */
@@ -1351,6 +1384,57 @@
         </style>
     </div>
     
+    <!-- Game Over Screen -->
+    <div id="game-over-screen" class="hidden" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 400; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
+        <div style="text-align: center; padding: 40px; background: rgba(10, 10, 26, 0.95); border: 2px solid #00ffff; border-radius: 12px; max-width: 500px; width: 90%;">
+            <h2 id="game-over-title" style="color: #00ffff; margin-bottom: 30px; text-transform: uppercase; font-size: 2rem; text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);">VICTORY</h2>
+            
+            <div style="margin-bottom: 30px;">
+                <h3 style="color: #00ffff; margin-bottom: 20px; font-size: 1.3rem; text-transform: uppercase;">BATTLE STATS</h3>
+                
+                <div style="display: flex; flex-direction: column; gap: 15px; text-align: left; background: rgba(0, 0, 0, 0.5); padding: 20px; border-radius: 8px; border: 1px solid rgba(0, 255, 255, 0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #aaaaaa;">Player HP Remaining:</span>
+                        <span id="stat-player-hp" style="color: #00ffff; font-weight: bold; font-size: 1.1rem;">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #aaaaaa;">Opponent HP Remaining:</span>
+                        <span id="stat-opponent-hp" style="color: #00ffff; font-weight: bold; font-size: 1.1rem;">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #aaaaaa;">Successful Blocks:</span>
+                        <span id="stat-blocks" style="color: #00ffff; font-weight: bold; font-size: 1.1rem;">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #aaaaaa;">Hits Landed:</span>
+                        <span id="stat-player-hits" style="color: #00ffff; font-weight: bold; font-size: 1.1rem;">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #aaaaaa;">Hits Taken:</span>
+                        <span id="stat-opponent-hits" style="color: #00ffff; font-weight: bold; font-size: 1.1rem;">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <button id="btn-return-to-menu" style="padding: 15px 40px; background: linear-gradient(135deg, #00ffff 0%, #00aaff 100%); color: #000; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 1.1rem; min-width: 200px; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0, 255, 255, 0.3);">
+                RETURN TO MENU
+            </button>
+        </div>
+    </div>
+    <style>
+        #game-over-screen.hidden {
+            display: none !important;
+        }
+        #btn-return-to-menu:hover {
+            background: linear-gradient(135deg, #00aaff 0%, #00ffff 100%);
+            box-shadow: 0 6px 20px rgba(0, 255, 255, 0.5);
+            transform: translateY(-2px);
+        }
+        #btn-return-to-menu:active {
+            transform: translateY(0);
+        }
+    </style>
+    
     <div id="ui-layer">
         <div id="hud">STATUS: WAITING</div>
         
@@ -1360,10 +1444,14 @@
             <div id="health-bar-label">HEALTH</div>
         </div>
         
-        <!-- Player Stamina Bar -->
+        <!-- Player Attack Charges -->
         <div id="stamina-bar-container">
-            <div id="stamina-bar-fill"></div>
-            <div id="stamina-bar-label">STAMINA</div>
+            <div id="stamina-bar-label">ATTACKS</div>
+            <div id="charge-container">
+                <div class="charge-dot" id="charge-0"></div>
+                <div class="charge-dot" id="charge-1"></div>
+                <div class="charge-dot" id="charge-2"></div>
+            </div>
         </div>
         
         <!-- Direction Indicator -->

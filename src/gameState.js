@@ -1,6 +1,6 @@
 // Game State Management
 
-import { MAX_STAMINA, EXHAUSTED_THRESHOLD } from './config.js';
+import { MAX_STAMINA, EXHAUSTED_THRESHOLD, MAX_ATTACK_CHARGES, CHARGE_REGEN_TIME } from './config.js';
 
 // Game state variables
 export let opponentHealth = 100;
@@ -22,8 +22,20 @@ export let opponentAttackWindupTime = 0; // When the opponent will attack
 export let opponentAttackType = null; // Type of opponent's attack
 export let parryWindowStart = 0; // When parry window opens
 export let parryWindowEnd = 0; // When parry window closes
-export let playerStamina = MAX_STAMINA; // Player stamina
+export let playerStamina = MAX_STAMINA; // Player stamina (kept for backward compatibility)
 export let isExhausted = false; // Whether player is exhausted
+// Attack charge system (Player)
+export let availableCharges = MAX_ATTACK_CHARGES; // Number of available attack charges
+export let chargeRegenTimers = []; // Array of timestamps when each charge will be ready [{readyTime: timestamp}, ...]
+
+// Attack charge system (Opponent)
+export let opponentAvailableCharges = MAX_ATTACK_CHARGES; // Number of available opponent attack charges
+export let opponentChargeRegenTimers = []; // Array of timestamps when each opponent charge will be ready
+
+// Game stats tracking
+export let playerBlocks = 0; // Number of successful blocks
+export let playerHits = 0; // Number of successful hits on opponent
+export let opponentHits = 0; // Number of times opponent hit player
 
 // Opponent AI state
 export let opponentLastAttackTime = 0;
@@ -137,6 +149,120 @@ export function setCurrentAttackDirection(value) {
 export function setPlayerStamina(value) {
     playerStamina = Math.max(0, Math.min(MAX_STAMINA, value));
     isExhausted = playerStamina < EXHAUSTED_THRESHOLD;
+}
+
+// Charge system functions
+export function consumeCharge() {
+    if (availableCharges > 0) {
+        availableCharges--;
+        // Add regen timer for this charge (each charge regenerates independently)
+        const readyTime = Date.now() + CHARGE_REGEN_TIME;
+        chargeRegenTimers.push({ readyTime });
+        return true;
+    }
+    return false;
+}
+
+export function updateChargeRegeneration() {
+    const now = Date.now();
+    // Check each timer and regenerate charges that are ready
+    const readyCount = chargeRegenTimers.filter(timer => timer.readyTime <= now).length;
+    if (readyCount > 0 && availableCharges < MAX_ATTACK_CHARGES) {
+        // Regenerate charges
+        const chargesToAdd = Math.min(readyCount, MAX_ATTACK_CHARGES - availableCharges);
+        availableCharges += chargesToAdd;
+        // Remove processed timers (only remove the ones we just processed)
+        let removed = 0;
+        chargeRegenTimers = chargeRegenTimers.filter(timer => {
+            if (timer.readyTime <= now && removed < chargesToAdd) {
+                removed++;
+                return false;
+            }
+            return true;
+        });
+    }
+}
+
+export function getChargeRegenProgress() {
+    // Returns array of progress (0-1) for each charge being regenerated
+    const now = Date.now();
+    const progress = [];
+    for (let i = 0; i < chargeRegenTimers.length; i++) {
+        const timer = chargeRegenTimers[i];
+        const elapsed = now - (timer.readyTime - CHARGE_REGEN_TIME);
+        progress.push(Math.min(1, Math.max(0, elapsed / CHARGE_REGEN_TIME)));
+    }
+    return progress;
+}
+
+export function resetCharges() {
+    availableCharges = MAX_ATTACK_CHARGES;
+    chargeRegenTimers = [];
+}
+
+export function setAvailableCharges(value) {
+    availableCharges = Math.max(0, Math.min(MAX_ATTACK_CHARGES, value));
+}
+
+// Opponent charge system functions
+export function consumeOpponentCharge() {
+    if (opponentAvailableCharges > 0) {
+        opponentAvailableCharges--;
+        // Add regen timer for this charge
+        const readyTime = Date.now() + CHARGE_REGEN_TIME;
+        opponentChargeRegenTimers.push({ readyTime });
+        console.log(`Opponent charge consumed! Remaining: ${opponentAvailableCharges}/${MAX_ATTACK_CHARGES}, Regen in ${CHARGE_REGEN_TIME}ms`);
+        return true;
+    }
+    console.warn(`Opponent tried to attack but has no charges! Available: ${opponentAvailableCharges}`);
+    return false;
+}
+
+export function updateOpponentChargeRegeneration() {
+    const now = Date.now();
+    // Check each timer and regenerate charges that are ready
+    const readyCount = opponentChargeRegenTimers.filter(timer => timer.readyTime <= now).length;
+    if (readyCount > 0 && opponentAvailableCharges < MAX_ATTACK_CHARGES) {
+        // Regenerate charges
+        const chargesToAdd = Math.min(readyCount, MAX_ATTACK_CHARGES - opponentAvailableCharges);
+        opponentAvailableCharges += chargesToAdd;
+        // Remove processed timers
+        let removed = 0;
+        opponentChargeRegenTimers = opponentChargeRegenTimers.filter(timer => {
+            if (timer.readyTime <= now && removed < chargesToAdd) {
+                removed++;
+                return false;
+            }
+            return true;
+        });
+        if (chargesToAdd > 0) {
+            console.log(`Opponent charge regenerated! Now has ${opponentAvailableCharges}/${MAX_ATTACK_CHARGES} charges`);
+        }
+    }
+}
+
+export function resetOpponentCharges() {
+    opponentAvailableCharges = MAX_ATTACK_CHARGES;
+    opponentChargeRegenTimers = [];
+}
+
+// Stats tracking functions
+export function incrementPlayerBlocks() {
+    playerBlocks++;
+}
+
+export function incrementPlayerHits() {
+    playerHits++;
+}
+
+export function incrementOpponentHits() {
+    opponentHits++;
+}
+
+export function resetGameStats() {
+    playerBlocks = 0;
+    playerHits = 0;
+    opponentHits = 0;
 }
 
 export function setParryWindow(start, end) {
@@ -294,6 +420,8 @@ export function resetGameState() {
     opponentAttackType = null;
     playerStamina = MAX_STAMINA;
     isExhausted = false;
+    availableCharges = MAX_ATTACK_CHARGES;
+    chargeRegenTimers = [];
     parryWindowStart = 0;
     parryWindowEnd = 0;
     opponentAttackType = null;

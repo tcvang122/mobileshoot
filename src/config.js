@@ -81,9 +81,12 @@ export const DODGE_INVINCIBILITY_DURATION = 400; // 0.4 seconds of invincibility
 export const OPPONENT_ATTACK_INTERVAL_BASE = 3000; // Base attack interval for opponent (faster combat)
 export const ATTACK_COOLDOWN = 100; // Minimum time between attacks (ms) - very fast
 export const OPPONENT_ATTACK_WINDUP_TIME = 800; // Time player has to block before attack lands (ms) - For Honor style
-export const MAX_STAMINA = 100; // Maximum stamina
-export const STAMINA_REGEN_RATE = 10; // Stamina per second regeneration (slower regen)
-export const EXHAUSTED_THRESHOLD = 20; // Below this stamina, player is exhausted
+// Attack Charge System (per-attack meter)
+export const MAX_ATTACK_CHARGES = 3; // Maximum number of attack charges
+export const CHARGE_REGEN_TIME = 3000; // Time in ms for each charge to regenerate (3 seconds)
+export const MAX_STAMINA = 100; // Keep for backward compatibility (opponent stamina)
+export const STAMINA_REGEN_RATE = 10; // Keep for backward compatibility
+export const EXHAUSTED_THRESHOLD = 20; // Keep for backward compatibility
 
 // Block timing slider constants
 export const BLOCK_TIMING_SLIDER_DURATION = 1000; // How long the slider takes to cross (ms)
